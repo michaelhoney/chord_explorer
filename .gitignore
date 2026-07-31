@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# dependencies / build output (also covered by app/.gitignore for the app subtree)
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# logs
+*.log
+npm-debug.log*
