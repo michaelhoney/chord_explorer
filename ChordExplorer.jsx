@@ -18,8 +18,15 @@ const nameOf = (pc, root) => (FLAT_KEYS.has(root) ? FLAT : SHARP)[((pc % 12) + 1
 const STEPS = {
   major: [0, 2, 4, 5, 7, 9, 11],
   minor: [0, 2, 3, 5, 7, 8, 10], // natural minor; harmonic-minor dominant added as colour
+  mixolydian: [0, 2, 4, 5, 7, 9, 10], // major with a ♭7 — that flat-seventh colour
 };
 const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII"];
+// scale degrees written with a ♭ prefix on their roman (flattened vs the major scale)
+const FLAT_DEG = { mixolydian: new Set([6]) }; // ♭VII
+const romanFor = (mode, d, q) =>
+  (FLAT_DEG[mode]?.has(d) ? "♭" : "") +
+  (q.upper ? ROMAN[d] : ROMAN[d].toLowerCase()) +
+  q.romanSuffix;
 
 // harmonic function + a rough "distance from home" tension value, per degree
 const FUNC = {
@@ -30,6 +37,10 @@ const FUNC = {
   minor: [
     ["tonic", 0], ["predominant", 2], ["tonic", 1], ["predominant", 2],
     ["dominant", 2.5], ["tonic", 1], ["subtonic", 2.5],
+  ],
+  mixolydian: [
+    ["tonic", 0], ["predominant", 2], ["tonic", 1.5], ["predominant", 2],
+    ["dominant", 2], ["tonic", 1], ["subtonic", 2.5],
   ],
 };
 
@@ -201,8 +212,7 @@ function buildKey(root, mode) {
     const intervals = pcs.map((pc) => (((pc - r) % 12) + 12) % 12);
     const q = classify(intervals);
     const [func, tension] = FUNC[mode][d];
-    let roman = q.upper ? ROMAN[d] : ROMAN[d].toLowerCase();
-    roman += q.romanSuffix;
+    const roman = romanFor(mode, d, q);
     return {
       rootPc: r,
       intervals,
@@ -259,7 +269,7 @@ function buildKey(root, mode) {
       "Borrowed ♭VII — modal, rock/folk flavour; a whole step below home."));
     colour.push(mk((root + 8) % 12, [0, 4, 7], "♭VI", "borrowed", 2.5,
       "Borrowed ♭VI — cinematic lift straight out of the parallel minor."));
-  } else {
+  } else if (mode === "minor") {
     // harmonic-minor dominant: the real pull back to the minor tonic
     colour.push(mk((root + 7) % 12, [0, 4, 7], "V", "dominant", 3,
       "Major dominant (raised leading tone) — the strong pull back to the minor tonic.",
@@ -275,6 +285,21 @@ function buildKey(root, mode) {
     colour.push(mk((root + 8) % 12, [0, 4, 7, 10], "V7/III", "secondary", 4,
       `Secondary dominant — sets up the relative major (${nameOf((root + 3) % 12, root)}).`,
       (root + 3) % 12));
+  } else if (mode === "mixolydian") {
+    // borrow Ionian's leading tone when you want a real cadence instead of the soft v
+    colour.push(mk((root + 7) % 12, [0, 4, 7], "V", "dominant", 3,
+      "Major V (borrowed leading tone) — a stronger pull home than the modal v.",
+      root));
+    colour.push(mk((root + 7) % 12, [0, 4, 7, 10], "V7", "dominant", 3.5,
+      "Dominant 7th — the leading-tone cadence, if you want to leave Mixolydian for a moment.",
+      root));
+    // secondary dominant of the signature ♭VII
+    colour.push(mk((root + 5) % 12, [0, 4, 7, 10], "V7/♭VII", "secondary", 4,
+      `Secondary dominant — sets up the ♭VII (${nameOf((root + 10) % 12, root)}).`,
+      (root + 10) % 12));
+    // parallel-minor ♭VI, the cinematic lift
+    colour.push(mk((root + 8) % 12, [0, 4, 7], "♭VI", "borrowed", 2.5,
+      "Borrowed ♭VI — cinematic lift from the parallel minor."));
   }
 
   return { diatonic, colour, root, mode, scale };
@@ -346,6 +371,15 @@ const SPECIAL = {
     "1>6": "Lifts to the submediant — a shaft of major light.",
     "1>7": "Down a step to the subtonic — modal, folk/rock colour.",
   },
+  mixolydian: {
+    "7>1": "♭VII → I — the signature Mixolydian cadence; a whole-step drop home.",
+    "1>7": "Down to ♭VII — leans into that flat-seventh colour.",
+    "4>1": "Plagal — the gentle ‘Amen’ home.",
+    "5>1": "Soft modal cadence — minor v eases home, no leading tone.",
+    "1>4": "Opens into the bright subdominant.",
+    "1>5": "To the modal v — mellower than a major dominant.",
+    "4>7": "IV to ♭VII — the classic two-chord Mixolydian vamp.",
+  },
 };
 const ROLE = {
   major: {
@@ -365,6 +399,15 @@ const ROLE = {
     5: "Weak dominant (v). For a real pull, reach for the major V in Colour.",
     6: "Submediant — lush, borrowed-from-major brightness.",
     7: "Subtonic — the modal step below; folk/rock, or a route to III.",
+  },
+  mixolydian: {
+    1: "Home — the Mixolydian tonic (major, but with a ♭7 in the air).",
+    2: "Supertonic minor — a gentle predominant.",
+    3: "Diminished mediant — tense, best as a passing chord.",
+    4: "Subdominant — bright, opens the harmony up.",
+    5: "Minor v — the soft modal dominant, no leading tone.",
+    6: "Submediant minor — a mellow resting point.",
+    7: "♭VII — the signature Mixolydian chord, a whole step below home.",
   },
 };
 
@@ -396,7 +439,7 @@ const SAL_MINOR = { 1: 0.9, 2: 0.6, 3: 0.55, 4: 0.85, 5: 0.5, 6: 0.65, 7: 0.75 }
 function salience(mode, chord) {
   if (chord.group === "colour")
     return chord.func === "dominant" ? 0.9 : chord.func === "secondary" ? 0.5 : 0.4;
-  return (mode === "major" ? SAL_MAJOR : SAL_MINOR)[chord.degree] || 0.5;
+  return (mode === "minor" ? SAL_MINOR : SAL_MAJOR)[chord.degree] || 0.5;
 }
 
 // build the option list from the current chord
@@ -484,8 +527,7 @@ function resolveKey(root, mode, add7) {
     const intervals = pcs.map((pc) => (((pc - r) % 12) + 12) % 12);
     const q = classify(intervals);
     const [func, tension] = FUNC[mode][d];
-    let roman = q.upper ? ROMAN[d] : ROMAN[d].toLowerCase();
-    roman += q.romanSuffix;
+    const roman = romanFor(mode, d, q);
     return {
       rootPc: r, intervals, quality: q, name: nameOf(r, root) + q.suffix,
       roman, degree: d + 1, func, tension, group: "in-key", resolvesTo: null,
@@ -506,6 +548,7 @@ function encodeState(s) {
   const p = new URLSearchParams();
   p.set("k", s.root);
   if (s.mode === "minor") p.set("m", "min");
+  else if (s.mode === "mixolydian") p.set("m", "mixo");
   if (s.add7) p.set("s7", "1");
   if (!s.voiceLead) p.set("vl", "0"); // on by default; only record when turned off
   if (s.arp) p.set("arp", "1");
@@ -524,7 +567,7 @@ function decodeState(search) {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : def;
   };
   const root = clampNum(p.get("k"), 0, 0, 11);
-  const mode = p.get("m") === "min" ? "minor" : "major";
+  const mode = p.get("m") === "min" ? "minor" : p.get("m") === "mixo" ? "mixolydian" : "major";
   const add7 = p.get("s7") === "1";
   const voiceLead = p.get("vl") !== "0"; // default on; also honours legacy vl=1
   const arp = p.get("arp") === "1";
@@ -734,14 +777,15 @@ export default function ChordExplorer() {
           </label>
 
           <div className="ce-seg" role="group" aria-label="Mode">
-            {["major", "minor"].map((m) => (
+            {[["major", "major"], ["minor", "minor"], ["mixolydian", "mixo"]].map(([m, label]) => (
               <button
                 key={m}
                 className={mode === m ? "on" : ""}
                 aria-pressed={mode === m}
+                title={m}
                 onClick={() => changeKey(root, m)}
               >
-                {m}
+                {label}
               </button>
             ))}
           </div>
