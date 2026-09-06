@@ -1176,6 +1176,11 @@ function PianoRoll({
   );
 }
 
+// Kept, not dead: the tension curve is out of the progression view for now but
+// the concept it draws — distance from home over time — is the thing the whole
+// app is about, and it will come back. Deliberately unused, so silence the rule
+// rather than deleting the component to appease it.
+// eslint-disable-next-line no-unused-vars
 function TensionCurve({ prog, playingIdx }) {
   const W = 100, H = 34, pad = 4;
   const max = 4.5;
