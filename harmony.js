@@ -508,6 +508,31 @@ export const isResolution = (prev, next) =>
   next.resolvesTo !== next.rootPc;
 
 // build the option list from the current chord
+// the one place this sentence lives — optionsFrom and decorateChain both need it
+export const resolutionMove = (name) =>
+  `Resolution — lands home on ${name}, releasing the previous chord’s tension.`;
+
+// decorate a bare chord sequence into progression items: each chord's motion and
+// description read relative to the one before it. Shared by the URL decoder and
+// the loop suggester, so a reconstituted, suggested and hand-picked chord all
+// carry identical fields.
+export function decorateChain(chords, mode) {
+  const out = [];
+  for (const c of chords) {
+    const prev = out.length ? out[out.length - 1] : null;
+    const resolution = isResolution(prev, c);
+    out.push({
+      ...c,
+      motion: prev ? motionLabel(prev.rootPc, c.rootPc) : null,
+      resolution,
+      move: resolution
+        ? resolutionMove(c.name)
+        : moveDescription(mode, prev ? prev.degree : null, c),
+    });
+  }
+  return out;
+}
+
 export function optionsFrom(current, key) {
   const fromFunc = current ? current.func : null;
   const fromDeg = current ? current.degree : null;
@@ -526,7 +551,7 @@ export function optionsFrom(current, key) {
   if (current) {
     inKey = inKey.map((c) =>
       c.resolution
-        ? { ...c, move: `Resolution — lands home on ${c.name}, releasing the previous chord’s tension.` }
+        ? { ...c, move: resolutionMove(c.name) }
         : c
     );
     inKey.sort((a, b) => rank(b) - rank(a) || a.degree - b.degree);
@@ -538,3 +563,66 @@ export function optionsFrom(current, key) {
   return { inKey, colour, sus };
 }
 
+
+// --- suggest a loop -----------------------------------------------------
+// A weighted walk over the transition graph, using the same score()/salience()
+// tables that rank the chooser — so a suggestion is idiomatic for the same
+// reasons the top of the futures list is.
+//
+// `rand` is injected rather than reaching for Math.random, which keeps the
+// engine a pure function of its inputs and lets tests pin a seed.
+function pickWeighted(items, weights, rand) {
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total <= 0) return items[Math.floor(rand() * items.length)];
+  let r = rand() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return items[i];
+  }
+  return items[items.length - 1];
+}
+
+export function suggestLoop(key, { bars = 4, rand = Math.random } = {}) {
+  const n = Math.max(2, Math.round(bars));
+  // suspensions are a colour you add to a chord, not a skeleton to build on
+  const pool = [...key.diatonic, ...key.colour];
+  const tonic = key.diatonic[0];
+  const chords = [tonic];
+
+  for (let i = 1; i < n; i++) {
+    const prev = chords[chords.length - 1];
+    const last = i === n - 1;
+    // No immediate repeats — and the last bar is adjacent to the first, since the
+    // whole point is that it comes round again. Interior bars also can't return
+    // to the root two back: A–B–A oscillation is what a weighted walk falls into
+    // otherwise, and "C A7 C G" is a worse loop than anything it rules out. The
+    // last bar is exempt, so a dominant heard earlier can still bring it home.
+    const before = i >= 2 ? chords[i - 2].rootPc : null;
+    const excluded = (c) =>
+      c.rootPc === prev.rootPc ||
+      (last && c.rootPc === tonic.rootPc) ||
+      (!last && c.rootPc === before);
+    let cands = pool.filter((c) => !excluded(c));
+    if (!cands.length) cands = pool.filter((c) => c.rootPc !== prev.rootPc);
+    const seen = new Set(chords.map((c) => c.rootPc));
+    const weights = cands.map((c) => {
+      let w = score(prev.func, c) * salience(key.mode, c);
+      // a loop wants somewhere to go. Without these two the walk oscillates —
+      // the tonic's salience is high enough to pull it back every other bar,
+      // which is how you get I V7/ii I V instead of a progression.
+      if (seen.has(c.rootPc)) w *= 0.3;
+      if (last) {
+        // the last bar has to hand back to the top of the loop
+        if (c.func === "dominant") w *= 3;
+        else if (c.func === "predominant" || c.func === "subtonic") w *= 1.6;
+        else w *= 0.5;
+        if (c.resolvesTo === tonic.rootPc) w *= 2;
+      } else if (c.rootPc === tonic.rootPc) {
+        w *= 0.2; // home mid-loop kills the movement; it already ends there
+      }
+      return w;
+    });
+    chords.push(pickWeighted(cands, weights, rand));
+  }
+  return decorateChain(chords, key.mode);
+}

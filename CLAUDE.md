@@ -85,6 +85,21 @@ The engine, reading top to bottom:
 - **`SPECIAL` / `ROLE` / `moveDescription()`** — the contextual "what this move does" copy.
   `SPECIAL` keys named cadences by `fromDegree>toDegree`; `ROLE` is the destination-only
   fallback.
+- **`decorateChain(chords, mode)` / `resolutionMove(name)`** — turn a bare chord sequence
+  into progression items, each read relative to the one before it. The URL decoder and
+  `suggestLoop` both go through it, so a reconstituted, suggested and hand-picked chord carry
+  identical fields; `resolutionMove` is the single home for that one sentence, which had been
+  written out in three places. Extracting it made `motionLabel`, `moveDescription` and
+  `isResolution` unused in the presentation layer — a good sign the duplication was real.
+- **`suggestLoop(key, { bars, rand })`** — a weighted walk over the transition graph, using
+  the same `score()`/`salience()` tables that rank the chooser, so a suggestion is idiomatic
+  for the same reasons the top of the futures list is. `rand` is **injected**, not
+  `Math.random` reached for internally: that keeps the engine a pure function of its inputs
+  and lets tests pin a seed. Three structural rules do more for the output than the weights
+  do — no adjacent repeats, no A–B–A oscillation on interior bars, and the last bar can't be
+  the tonic, since it is adjacent to the first when the loop comes round. Without the A–B–A
+  ban the walk falls into `C A7 C G`, because the tonic's salience pulls it home every other
+  bar. Suspensions are excluded: they're a colour you add to a chord, not a skeleton.
 - **`isResolution(prev, next)`** — does the move discharge what `prev` was leaning on?
   Root-matching alone isn't enough: a suspension resolves to its *own* root, so that would
   call `Fsus4 → Fsus2` a resolution (and `Fsus4 → Fsus4` one too). The second clause,
@@ -97,7 +112,10 @@ The engine, reading top to bottom:
   `resolution` flag.
 - **`useMidiOut()`** — the **Output** selector. `status` is a small state machine
   (`unsupported | insecure | idle | asking | ready | denied`) whose copy lives in
-  `MIDI_STATUS`; support and secure context are checked **before** the control is offered,
+  `MIDI_STATUS`; on a successful enable it selects the first available port straight away —
+  you didn't grant MIDI access to keep hearing the built-in synth — but only there, never on
+  a later `onstatechange`, since a device appearing mid-session shouldn't reroute you without
+  asking. Support and secure context are checked **before** the control is offered,
   because Safari has never shipped Web MIDI and a dead dropdown explains nothing. Access is
   requested without sysex (notes don't need it, and asking prompts harder) from a click, and
   `onstatechange` refreshes the port list on hot-plug. `send` rebases Tone's audio clock onto
@@ -244,7 +262,7 @@ Roughly in order of fun (see README for detail):
    columns — and each tile shows the resulting inversion as a slash chord.
 3. ✅ **Web MIDI out** — done; `useMidiOut` + the **Output** selector. Verified against a
    Waldorf Protein over USB-C in Chrome.
-4. **"Suggest a loop"** — walk the transition graph to propose a 2/4/8-bar progression.
+4. ✅ **"Suggest a loop"** — done; `suggestLoop` + the **Suggest** control.
 5. **Save progressions** — localStorage or export to a small text format.
 6. **Export** — MIDI file, or a chord-chart / lead-sheet string.
 

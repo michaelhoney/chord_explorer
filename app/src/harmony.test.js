@@ -4,6 +4,8 @@ import {
   buildKey,
   resolveKey,
   suspensionsFor,
+  suggestLoop,
+  decorateChain,
   optionsFrom,
   rootPositionMidi,
   voiceLeadMidi,
@@ -333,5 +335,88 @@ describe("voicing", () => {
     expect(midiToNotes([60, 61, 45, 57, 72, 35])).toEqual(
       ["C4", "C#4", "A2", "A3", "C5", "B1"]
     );
+  });
+});
+
+// a seeded PRNG, so a "random" suggestion is reproducible in a test
+const seeded = (a) => () => {
+  a |= 0; a = (a + 0x6d2b79f5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+
+describe("decorateChain", () => {
+  it("reads each chord relative to the one before it", () => {
+    const key = buildKey(C, "major");
+    const chain = decorateChain([key.diatonic[4], key.diatonic[0]], "major");
+    expect(chain[0].motion).toBe(null); // nothing precedes the first
+    expect(chain[1].motion).toBe("up a fourth");
+    expect(chain[1].move).toMatch(/Authentic cadence/);
+  });
+
+  it("flags a suspension resolving onto its triad", () => {
+    const key = buildKey(C, "major");
+    const fsus4 = suspensionsFor(key).find((s) => s.name === "Fsus4");
+    const chain = decorateChain([fsus4, key.diatonic[3]], "major");
+    expect(chain[1].resolution).toBe(true);
+    expect(chain[1].move).toMatch(/^Resolution/);
+  });
+});
+
+describe("suggestLoop", () => {
+  const keys = [
+    [C, "major"],
+    [9, "minor"],
+    [7, "mixolydian"],
+  ];
+
+  it("returns the requested number of bars, starting home", () => {
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      for (const bars of [2, 4, 8]) {
+        const loop = suggestLoop(key, { bars, rand: seeded(4) });
+        expect(loop).toHaveLength(bars);
+        expect(loop[0].rootPc).toBe(key.diatonic[0].rootPc);
+      }
+    }
+  });
+
+  it("is a pure function of its inputs — same seed, same loop", () => {
+    const key = buildKey(C, "major");
+    const a = suggestLoop(key, { bars: 4, rand: seeded(99) });
+    const b = suggestLoop(key, { bars: 4, rand: seeded(99) });
+    expect(a.map((c) => c.name)).toEqual(b.map((c) => c.name));
+  });
+
+  it("keeps moving: no repeats, no A–B–A, and it never ends at home", () => {
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      for (let seed = 0; seed < 60; seed++) {
+        const loop = suggestLoop(key, { bars: 4, rand: seeded(seed) });
+        const roots = loop.map((c) => c.rootPc);
+        for (let i = 1; i < roots.length; i++) expect(roots[i]).not.toBe(roots[i - 1]);
+        // interior bars can't bounce back to the root two before them
+        for (let i = 2; i < roots.length - 1; i++) expect(roots[i]).not.toBe(roots[i - 2]);
+        // the last bar is adjacent to the first when it comes round again
+        expect(roots[roots.length - 1]).not.toBe(roots[0]);
+      }
+    }
+  });
+
+  it("only suggests chords that carry a function and a tension", () => {
+    // the colour = function invariant: every chord must plot and get a hue
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      const pool = new Set([...key.diatonic, ...key.colour].map((c) => c.roman));
+      for (let seed = 0; seed < 30; seed++) {
+        for (const c of suggestLoop(key, { bars: 8, rand: seeded(seed) })) {
+          expect(pool.has(c.roman)).toBe(true);
+          expect(typeof c.func).toBe("string");
+          expect(typeof c.tension).toBe("number");
+          expect(typeof c.move).toBe("string"); // arrives decorated, like a chosen chord
+        }
+      }
+    }
   });
 });

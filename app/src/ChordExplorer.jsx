@@ -17,9 +17,8 @@ import {
   bassNameOf,
   resolveKey,
   suspensionsFor,
-  isResolution,
-  motionLabel,
-  moveDescription,
+  suggestLoop,
+  decorateChain,
   optionsFrom,
 } from "./harmony.js";
 
@@ -82,10 +81,15 @@ function useMidiOut() {
     try {
       // no sysex: notes don't need it, and asking for it prompts harder
       const a = await navigator.requestMIDIAccess();
-      const list = () =>
-        setOutputs([...a.outputs.values()].map((o) => ({ id: o.id, name: o.name })));
+      const read = () => [...a.outputs.values()].map((o) => ({ id: o.id, name: o.name }));
+      const list = () => setOutputs(read());
       access.current = a;
-      list();
+      const found = read();
+      setOutputs(found);
+      // you didn't grant MIDI access to keep listening to the built-in synth:
+      // land on a real port straight away. Only here, not on later statechanges —
+      // a device appearing mid-session shouldn't reroute you without asking.
+      if (found.length) setPortId(found[0].id);
       a.onstatechange = list; // ports appearing and going away
       setStatus("ready");
     } catch {
@@ -241,22 +245,13 @@ function decodeState(search) {
           c.intervals.every((x, i) => x === intervals[i])
       );
       if (!match) break; // unknown chord — stop rather than guess
-      // decorate like optionsFrom so a reconstituted chord matches a chosen one
-      const prev = prog.length ? prog[prog.length - 1] : null;
-      const resolution = isResolution(prev, match);
-      prog.push({
-        ...match,
-        id: prog.length + 1,
-        inv,
-        motion: prev ? motionLabel(prev.rootPc, match.rootPc) : null,
-        resolution,
-        move: resolution
-          ? `Resolution — lands home on ${match.name}, releasing the previous chord’s tension.`
-          : moveDescription(mode, prev ? prev.degree : null, match),
-      });
+      prog.push({ ...match, inv });
     }
   }
-  return { root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog };
+  // decorated through the engine, so a reconstituted chord carries exactly the
+  // fields a chosen or suggested one does
+  const chain = decorateChain(prog, mode).map((c, i) => ({ ...c, id: i + 1 }));
+  return { root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog: chain };
 }
 
 export default function ChordExplorer() {
@@ -639,6 +634,13 @@ export default function ChordExplorer() {
     [moveChord, removeChord]
   );
 
+  // walk the transition graph for a loop that comes round again
+  const [bars, setBars] = useState(4);
+  const suggest = useCallback(() => {
+    setProg(suggestLoop(key, { bars }).map((c) => ({ ...c, id: ++uid.current })));
+    setQuery("");
+  }, [key, bars]);
+
   const undo = () => setProg((p) => p.slice(0, -1));
   const clear = () => setProg([]);
 
@@ -822,6 +824,24 @@ export default function ChordExplorer() {
             >
               {playing ? "■ Stop" : "▶ Play"}
             </button>
+            <span className="ce-suggest">
+              <button
+                onClick={suggest}
+                title={`Propose a ${bars}-bar loop — click again to re-roll. Replaces the progression.`}
+              >
+                Suggest
+              </button>
+              <select
+                value={bars}
+                onChange={(e) => setBars(Number(e.target.value))}
+                aria-label="Bars in a suggested loop"
+                title="How many bars the suggestion should be"
+              >
+                {[2, 4, 8].map((b) => (
+                  <option key={b} value={b}>{b} bars</option>
+                ))}
+              </select>
+            </span>
             <button onClick={undo} disabled={!prog.length}>Undo</button>
             <button onClick={clear} disabled={!prog.length}>Clear</button>
             <button
@@ -1284,6 +1304,14 @@ const CSS = `
   border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer;
 }
 .ce-transport button:disabled{opacity:.4; cursor:default;}
+.ce-suggest{display:inline-flex; align-items:stretch; gap:0;}
+.ce-suggest button{border-top-right-radius:0; border-bottom-right-radius:0;}
+.ce-suggest select{
+  font-family:var(--mono); font-size:11px; padding:0 4px 0 6px; cursor:pointer;
+  border:1px solid var(--line); border-left:0; border-radius:0 8px 8px 0;
+  background:var(--bg); color:var(--muted);
+}
+.ce-suggest select:hover{color:var(--ink);}
 .ce-transport button:first-child{background:var(--ink); color:var(--panel); border-color:var(--ink);}
 .ce-transport button:first-child:disabled{background:var(--bg); color:var(--ink);}
 .ce-transport button.ce-playing{background:var(--tension); border-color:var(--tension); color:var(--panel);}

@@ -56,7 +56,8 @@ enriches the diatonic chords (V becomes V7, etc.). **Tempo** controls playback s
 already in progress.
 
 **Output** sends the notes to an external instrument instead of the built-in synth. Click
-*Enable MIDI*, allow the permission, then pick a port; switching output mid-run moves the
+*Enable MIDI* and allow the permission — it switches to the first port it finds, and the
+dropdown lets you pick another; switching output mid-run moves the
 sound across, and Stop sends an all-notes-off so nothing hangs on the hardware. Needs
 Chrome 43+ or Firefox 108+ — Safari has never shipped Web MIDI, on macOS or iOS — and a
 secure context, so HTTPS or localhost. The control says which of those is missing rather
@@ -91,6 +92,11 @@ The progression itself is a **piano roll**: each voice sits at its pitch height,
 common tones line up across chords and the voice leading is visible. Each note pill
 carries its semitone step from the previous chord, and plays on its own when clicked.
 
+**Suggest** proposes a loop — 2, 4 or 8 bars — by walking the transition graph with the
+same ranking that orders the futures list, biased so the last bar hands back to the first.
+Click it again to re-roll. It replaces whatever is in the progression, so share the link
+first if you want to keep something.
+
 **Drag a chord tile left or right to reorder it** — the voice leading re-solves as you
 drag, so you can see what a different order costs before you drop it. The **×** on a tile
 removes that chord. Both work from the keyboard too: focus a tile, then **Alt+←/→** to
@@ -116,8 +122,7 @@ position.
    Confirmed working into a Waldorf Protein over USB-C, in Chrome.
 2. **Voice-leading** — move common tones and step the rest, so playback flows instead of
    jumping in parallel blocks.
-3. **"Suggest a loop"** — walk the transition graph to propose a 2/4/8-bar progression,
-   then let you edit it.
+3. ✅ **"Suggest a loop"** — done; the **Suggest** button proposes a 2/4/8-bar loop.
 4. **Save progressions** — localStorage or export to a small text format. (The
    no-storage rule you may have seen was an artifact-sandbox limitation; a real Vite app
    has no such constraint.)
