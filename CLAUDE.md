@@ -90,10 +90,21 @@ The engine, reading top to bottom:
   `optionsFrom` is what the UI calls; it decorates each option with `move`, `motion`, and a
   `resolution` flag.
 - **`useSynth()`** — lazy `Tone.PolySynth → Reverb → Destination`, initialised inside a user
-  gesture.
+  gesture. Returns `{ ensure, release }`; `release` exists because `Transport.stop()`
+  unschedules what hasn't played but a note already triggered rings out on its envelope.
+- **Playback runs on `Tone.getTransport()`**, not a pass scheduled up front. The Loop toggle
+  forced this: a loop needs a Stop that lands *now*, and `Transport.cancel()` is the only
+  thing that unschedules what's queued. Events are placed in Transport time (`0:beat:0`),
+  so the tempo slider rescales a run already in flight. The end-of-run stop is **always**
+  scheduled and guarded by `loopRef.current`, which is what makes both directions work live:
+  turning Loop off mid-cycle ends the run at that cycle's end, turning it on never trips the
+  stop. `playingRef` / `loopRef` shadow the state because scheduled callbacks and the
+  invalidation effect would otherwise close over stale values — and depending on `playing`
+  in that effect would stop playback the instant it started. Editing the progression (or the
+  key) stops playback, since the schedule is built against a specific `voicings`.
 - **Component + `FutureList` / `FutureRow` + `PianoRoll`** — state is `root, mode, add7,
-  voiceLead, arp, tempo, prog, playingIdx`, plus `exiting` / `spawn` for the choose
-  choreography. `arp` (Arpeggio toggle) makes `playVoiced` roll a chord's notes
+  voiceLead, arp, loop, tempo, prog, playingIdx, playing`, plus `exiting` / `spawn` for the
+  choose choreography. `arp` (Arpeggio toggle) makes `playVoiced` roll a chord's notes
   up with staggered onsets that hold to the end of the slot, instead of one block attack. `PianoRoll` renders the progression as columns where each voice sits at
   its pitch height (`top = (max - midi) * ROW`), so common tones line up across columns and
   voice leading is visible; a note common with the previous chord gets a `held` style. A
@@ -176,8 +187,12 @@ Roughly in order of fun (see README for detail):
    columns — and each tile shows the resulting inversion as a slash chord.
 3. **Web MIDI out** — drive external instruments. Touches only the presentation layer: add a
    `navigator.requestMIDIAccess()` output selector and, in playback, send note-on/off to the
-   chosen port. Needs a secure context (`localhost` counts); realistically Chrome-only —
-   surface that in the UI rather than letting it fail silently in Safari.
+   chosen port alongside (or instead of) the synth. Needs a secure context (`localhost`
+   counts) and a permission grant. **Safari has never shipped it** — checked against caniuse
+   Sept 2026, still absent through Safari 27/TP on macOS and iOS, and since every iOS browser
+   is WebKit underneath, no iOS browser has it either. Chrome 43+ and Firefox 108+ do. So
+   feature-detect `navigator.requestMIDIAccess` and say so in the UI rather than letting the
+   control sit there dead.
 4. **"Suggest a loop"** — walk the transition graph to propose a 2/4/8-bar progression.
 5. **Save progressions** — localStorage or export to a small text format.
 6. **Export** — MIDI file, or a chord-chart / lead-sheet string.

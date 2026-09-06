@@ -51,7 +51,9 @@ it falls back to system fonts and still works.
 ## Using it
 
 Set a **key** and **major/minor**, then click any chord to start. The **7ths** toggle
-enriches the diatonic chords (V becomes V7, etc.). **Tempo** controls playback speed.
+enriches the diatonic chords (V becomes V7, etc.). **Tempo** controls playback speed, and
+**Loop** makes Play repeat the progression until you press Stop — both apply to a run
+already in progress.
 
 Every chord you could play next is listed to the right of the progression, one line
 each — name, roman numeral, the voice movement picking it would cost (Δ), and what the
@@ -96,9 +98,10 @@ position.
 
 ## Roadmap, roughly in order of fun
 
-1. **Web MIDI out** — drive the Poly-D / Orchid / Ableton instead of the built-in synth.
-   The most rewarding given your rig. (Chrome only, effectively — Safari's Web MIDI
-   support is poor, worth flagging in the UI.)
+1. **Web MIDI out** — drive the Poly-D / Orchid / Protein / Ableton instead of the built-in
+   synth. The most rewarding given the rig. Chrome 43+ and Firefox 108+ have it; Safari
+   never shipped it, on macOS or iOS, so feature-detect and say so rather than letting the
+   control sit there dead.
 2. **Voice-leading** — move common tones and step the rest, so playback flows instead of
    jumping in parallel blocks.
 3. **"Suggest a loop"** — walk the transition graph to propose a 2/4/8-bar progression,

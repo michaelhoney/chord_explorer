@@ -51,7 +51,10 @@ function useSynth() {
     }
     return ref.current;
   }, []);
-  return ensure;
+  // Transport.stop() unschedules what hasn't played, but a note already
+  // triggered rings out on its own envelope — this cuts it
+  const release = useCallback(() => ref.current?.releaseAll(), []);
+  return { ensure, release };
 }
 
 // ------------------------------------------------------------------------
@@ -107,6 +110,7 @@ function encodeState(s) {
   if (s.add7) p.set("s7", "1");
   if (!s.voiceLead) p.set("vl", "0"); // on by default; only record when turned off
   if (s.arp) p.set("arp", "1");
+  if (s.loop) p.set("lp", "1");
   if (s.susOn) p.set("su", "1");
   if (s.tempo !== 96) p.set("t", s.tempo);
   if (s.prog.length) p.set("p", s.prog.map(chordToken).join("_"));
@@ -126,6 +130,7 @@ function decodeState(search) {
   const add7 = p.get("s7") === "1";
   const voiceLead = p.get("vl") !== "0"; // default on; also honours legacy vl=1
   const arp = p.get("arp") === "1";
+  const loop = p.get("lp") === "1";
   const susOn = p.get("su") === "1";
   const tempo = clampNum(p.get("t"), 96, 60, 140);
   const pool = (() => {
@@ -164,7 +169,7 @@ function decodeState(search) {
       });
     }
   }
-  return { root, mode, add7, voiceLead, arp, susOn, tempo, prog };
+  return { root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog };
 }
 
 export default function ChordExplorer() {
@@ -174,12 +179,16 @@ export default function ChordExplorer() {
   const [add7, setAdd7] = useState(boot.add7 ?? false);
   const [voiceLead, setVoiceLead] = useState(boot.voiceLead ?? true);
   const [arp, setArp] = useState(boot.arp ?? false);
+  const [loop, setLoop] = useState(boot.loop ?? false);
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
   const [tempo, setTempo] = useState(boot.tempo ?? 96);
   const [prog, setProg] = useState(boot.prog ?? []);
   const [playingIdx, setPlayingIdx] = useState(-1);
+  const [playing, setPlaying] = useState(false);
+  const playingRef = useRef(false); // read inside scheduled callbacks and effects
+  const loopRef = useRef(false);
   const [query, setQuery] = useState("");
-  const ensure = useSynth();
+  const { ensure, release } = useSynth();
   const uid = useRef(boot.prog?.length ?? 0);
 
   // choosing is a short piece of choreography: the futures fade, the chosen one
@@ -204,10 +213,10 @@ export default function ChordExplorer() {
 
   // keep the URL in sync so any state is bookmarkable / shareable
   useEffect(() => {
-    const qs = encodeState({ root, mode, add7, voiceLead, arp, susOn, tempo, prog });
+    const qs = encodeState({ root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog });
     const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     window.history.replaceState(null, "", url);
-  }, [root, mode, add7, voiceLead, arp, susOn, tempo, prog]);
+  }, [root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog]);
 
   const current = prog.length ? prog[prog.length - 1] : null;
   const { inKey, colour, sus } = useMemo(() => optionsFrom(current, key), [current, key]);
@@ -350,20 +359,67 @@ export default function ChordExplorer() {
     });
   }, [spawn]);
 
+  // Playback runs on Tone's Transport rather than scheduling a pass up front:
+  // looping needs a Stop that lands now, not at the end of the current cycle,
+  // and Transport.cancel() is the only thing that unschedules what's queued.
+  // Events are placed in Transport time (beats), so the tempo slider rescales
+  // them mid-flight instead of applying only on the next Play.
+  const STEP = 2; // one chord = a half note = two beats
+  const atBeat = (n) => `0:${n}:0`;
+
+  const stopPlayback = useCallback(() => {
+    const t = Tone.getTransport();
+    t.stop();
+    t.cancel();
+    t.position = 0;
+    t.loop = false;
+    release();
+    playingRef.current = false;
+    setPlaying(false);
+    setPlayingIdx(-1);
+  }, [release]);
+
   const playAll = useCallback(async () => {
+    if (playingRef.current) return stopPlayback(); // the button is Play/Stop
     if (!prog.length) return;
     await ensure();
-    const beat = 60 / tempo;
-    const step = beat * 2; // one chord = a half note
-    const t0 = Tone.now() + 0.06;
+    const t = Tone.getTransport();
+    t.cancel();
+    t.bpm.value = tempo;
     prog.forEach((c, i) => {
-      playVoiced(voicings[i], step * 0.92, t0 + i * step);
-      const ms = (t0 + i * step - Tone.now()) * 1000;
-      setTimeout(() => setPlayingIdx(i), Math.max(0, ms));
+      t.schedule((time) => {
+        // duration read at fire time, so a tempo change lands on the next chord
+        playVoiced(voicings[i], Tone.Time(atBeat(STEP)).toSeconds() * 0.92, time);
+        Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
+      }, atBeat(i * STEP));
     });
-    const total = (t0 + prog.length * step - Tone.now()) * 1000;
-    setTimeout(() => setPlayingIdx(-1), total);
-  }, [prog, tempo, ensure, playVoiced, voicings]);
+    const end = atBeat(prog.length * STEP);
+    // always armed, and guarded by the live loop flag — so turning Loop off
+    // mid-cycle still ends the run, and turning it on never trips the stop
+    t.schedule((time) => {
+      if (!loopRef.current) Tone.getDraw().schedule(() => stopPlayback(), time);
+    }, end);
+    t.loopStart = 0;
+    t.loopEnd = end;
+    t.loop = loop;
+    t.position = 0;
+    playingRef.current = true;
+    setPlaying(true);
+    t.start();
+  }, [prog, tempo, loop, ensure, playVoiced, voicings, stopPlayback]);
+
+  // the toggles reach into a run already in progress
+  useEffect(() => { Tone.getTransport().bpm.value = tempo; }, [tempo]);
+  useEffect(() => {
+    loopRef.current = loop;
+    if (playingRef.current) Tone.getTransport().loop = loop;
+  }, [loop]);
+
+  // editing the progression invalidates what's scheduled against it
+  useEffect(() => {
+    if (playingRef.current) stopPlayback();
+  }, [prog, root, mode, add7, voiceLead, stopPlayback]);
+  useEffect(() => stopPlayback, [stopPlayback]); // and stop on unmount
 
   const undo = () => setProg((p) => p.slice(0, -1));
   const clear = () => setProg([]);
@@ -408,8 +464,7 @@ export default function ChordExplorer() {
           <div>
             <h1>Chord Paths</h1>
             <p className="ce-sub">
-              Pick a chord, hear it, and follow where it wants to go — every move
-              tagged with what it <em>does</em>.
+              Pick a chord, hear it, and follow where it wants to go.
             </p>
           </div>
         </div>
@@ -479,6 +534,15 @@ export default function ChordExplorer() {
             Arpeggio
           </button>
 
+          <button
+            className={"ce-toggle" + (loop ? " on" : "")}
+            aria-pressed={loop}
+            onClick={() => setLoop((v) => !v)}
+            title="Repeat the progression until you press Stop"
+          >
+            Loop
+          </button>
+
           <label className="ce-field ce-tempo">
             <span>Tempo {tempo}</span>
             <input
@@ -501,7 +565,13 @@ export default function ChordExplorer() {
             )}
           </span>
           <div className="ce-transport">
-            <button onClick={playAll} disabled={!prog.length}>▶ Play</button>
+            <button
+              onClick={playAll}
+              disabled={!prog.length}
+              className={playing ? "ce-playing" : ""}
+            >
+              {playing ? "■ Stop" : "▶ Play"}
+            </button>
             <button onClick={undo} disabled={!prog.length}>Undo</button>
             <button onClick={clear} disabled={!prog.length}>Clear</button>
             <button
@@ -880,7 +950,6 @@ const CSS = `
 .ce-root *{box-sizing:border-box;}
 .ce-root h1{font-size:22px; font-weight:700; letter-spacing:-.02em; margin:0;}
 .ce-sub{margin:2px 0 0; font-size:12.5px; color:var(--muted); max-width:46ch; line-height:1.4;}
-.ce-sub em{font-style:italic; color:var(--ink);}
 
 .ce-head{display:flex; flex-wrap:wrap; gap:16px; justify-content:space-between; align-items:flex-start;}
 .ce-brand{display:flex; gap:12px; align-items:flex-start;}
@@ -920,6 +989,7 @@ const CSS = `
 .ce-transport button:disabled{opacity:.4; cursor:default;}
 .ce-transport button:first-child{background:var(--ink); color:var(--panel); border-color:var(--ink);}
 .ce-transport button:first-child:disabled{background:var(--bg); color:var(--ink);}
+.ce-transport button.ce-playing{background:var(--tension); border-color:var(--tension); color:var(--panel);}
 .ce-share.copied:not(:disabled){background:var(--ink); color:var(--panel); border-color:var(--ink);}
 
 .ce-empty{font-size:13px; color:var(--muted); line-height:1.5; margin:4px 0; max-width:60ch;}
