@@ -89,6 +89,17 @@ The engine, reading top to bottom:
 - **`score()` / `salience()` / `optionsFrom(current, key)`** — ranks the next-chord options.
   `optionsFrom` is what the UI calls; it decorates each option with `move`, `motion`, and a
   `resolution` flag.
+- **`useMidiOut()`** — the **Output** selector. `status` is a small state machine
+  (`unsupported | insecure | idle | asking | ready | denied`) whose copy lives in
+  `MIDI_STATUS`; support and secure context are checked **before** the control is offered,
+  because Safari has never shipped Web MIDI and a dead dropdown explains nothing. Access is
+  requested without sysex (notes don't need it, and asking prompts harder) from a click, and
+  `onstatechange` refreshes the port list on hot-plug. `send` rebases Tone's audio clock onto
+  the `performance.now()` stamp `output.send` wants. Picking a port **replaces** the synth
+  rather than doubling it. `panic()` is not optional politeness: hardware holds a note until
+  told otherwise, so Stop and every port change do `clear()` (drop queued note-offs, or they
+  land after the reset) then all-notes-off. Not persisted to the URL — port ids are
+  machine-local and a shared link carrying one would be nonsense.
 - **`useSynth()`** — lazy `Tone.PolySynth → Reverb → Destination`, initialised inside a user
   gesture. Returns `{ ensure, release }`; `release` exists because `Transport.stop()`
   unschedules what hasn't played but a note already triggered rings out on its envelope.
@@ -98,7 +109,12 @@ The engine, reading top to bottom:
   so the tempo slider rescales a run already in flight. The end-of-run stop is **always**
   scheduled and guarded by `loopRef.current`, which is what makes both directions work live:
   turning Loop off mid-cycle ends the run at that cycle's end, turning it on never trips the
-  stop. `playingRef` / `loopRef` shadow the state because scheduled callbacks and the
+  stop. Scheduled callbacks call **`playVoicedRef.current`**, never the closure: a Transport
+  callback keeps whatever `playVoiced` it was built with, so switching MIDI output or
+  toggling Arpeggio mid-run would do nothing until the next Play. Same reason `stopPlayback`
+  lives in a ref — listing it as an effect dependency makes the cleanup fire on every port
+  change, silently stopping playback and panicking the port twice.
+  `playingRef` / `loopRef` shadow the state because scheduled callbacks and the
   invalidation effect would otherwise close over stale values — and depending on `playing`
   in that effect would stop playback the instant it started. Editing the progression (or the
   key) stops playback, since the schedule is built against a specific `voicings`.
@@ -122,8 +138,12 @@ The engine, reading top to bottom:
   still shows through within a tension band), **ordered by tension descending** so the
   top of the list is the furthest from home. Each `FutureRow` is one line —
   tension meter, name, roman, Δ-from-here, description — so a couple of dozen fit
-  vertically; hovering previews the chord, clicking commits it. There is no chord-tile
-  grid below any more; this list replaced it.
+  vertically. **Hovering the name** auditions the chord — the name only, so scanning a row's
+  description or Δ stays silent; clicking anywhere on the row commits it. The `tension ↓`
+  label in the head is a button that flips the sort: descending opens on the outside chords,
+  ascending puts the resolutions on top. Direction is deliberately **not** in the URL, same
+  as the filter — both are ways of looking at the list, not part of the progression. There is
+  no chord-tile grid below any more; this list replaced it.
 - **Filtering the futures** — `normQuery` / `matchesQuery` fold the display spellings down
   to what someone would type (`bvii` finds ♭VII, `bdim` finds B°, `f#` finds F♯) and match
   on **name and roman**, not the description. Escape clears, Enter commits the top match.
@@ -185,14 +205,8 @@ Roughly in order of fun (see README for detail):
 2. ✅ **Voice-leading** — done; the **Voice-leading** toggle switches playback from root
    position to `voiceLeadMidi`. The `PianoRoll` makes it legible — held voices align across
    columns — and each tile shows the resulting inversion as a slash chord.
-3. **Web MIDI out** — drive external instruments. Touches only the presentation layer: add a
-   `navigator.requestMIDIAccess()` output selector and, in playback, send note-on/off to the
-   chosen port alongside (or instead of) the synth. Needs a secure context (`localhost`
-   counts) and a permission grant. **Safari has never shipped it** — checked against caniuse
-   Sept 2026, still absent through Safari 27/TP on macOS and iOS, and since every iOS browser
-   is WebKit underneath, no iOS browser has it either. Chrome 43+ and Firefox 108+ do. So
-   feature-detect `navigator.requestMIDIAccess` and say so in the UI rather than letting the
-   control sit there dead.
+3. ✅ **Web MIDI out** — done; `useMidiOut` + the **Output** selector. Verified against a
+   Waldorf Protein over USB-C in Chrome.
 4. **"Suggest a loop"** — walk the transition graph to propose a 2/4/8-bar progression.
 5. **Save progressions** — localStorage or export to a small text format.
 6. **Export** — MIDI file, or a chord-chart / lead-sheet string.

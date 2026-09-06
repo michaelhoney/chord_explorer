@@ -55,12 +55,21 @@ enriches the diatonic chords (V becomes V7, etc.). **Tempo** controls playback s
 **Loop** makes Play repeat the progression until you press Stop — both apply to a run
 already in progress.
 
+**Output** sends the notes to an external instrument instead of the built-in synth. Click
+*Enable MIDI*, allow the permission, then pick a port; switching output mid-run moves the
+sound across, and Stop sends an all-notes-off so nothing hangs on the hardware. Needs
+Chrome 43+ or Firefox 108+ — Safari has never shipped Web MIDI, on macOS or iOS — and a
+secure context, so HTTPS or localhost. The control says which of those is missing rather
+than sitting there dead. Notes go out on channel 1.
+
 Every chord you could play next is listed to the right of the progression, one line
 each — name, roman numeral, the voice movement picking it would cost (Δ), and what the
 move *does*. They're **ordered by tension**, most tense at the top, so the list reads as
-a gradient from "outside" down to "home". Hovering a line plays it; clicking commits it,
-and the row flies into the roll and bursts into its note pills while the next set of
-futures assembles.
+a gradient from "outside" down to "home" — click **tension** in the header to flip that,
+and the resolutions rise to the top instead. Hovering a chord's **name** auditions it, so
+you can run down the column and hear the options without committing; clicking anywhere on
+the row commits it, and the row flies into the roll and bursts into its note pills while
+the next set of futures assembles.
 
 The list mixes diatonic chords with **colour** — secondary dominants and borrowed chords
 that sit outside the key for tension and surprise. If you land on a secondary dominant,
@@ -98,10 +107,8 @@ position.
 
 ## Roadmap, roughly in order of fun
 
-1. **Web MIDI out** — drive the Poly-D / Orchid / Protein / Ableton instead of the built-in
-   synth. The most rewarding given the rig. Chrome 43+ and Firefox 108+ have it; Safari
-   never shipped it, on macOS or iOS, so feature-detect and say so rather than letting the
-   control sit there dead.
+1. ✅ **Web MIDI out** — done; the **Output** selector drives external instruments.
+   Confirmed working into a Waldorf Protein over USB-C, in Chrome.
 2. **Voice-leading** — move common tones and step the rest, so playback flows instead of
    jumping in parallel blocks.
 3. **"Suggest a loop"** — walk the transition graph to propose a 2/4/8-bar progression,

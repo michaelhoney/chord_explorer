@@ -58,6 +58,72 @@ function useSynth() {
 }
 
 // ------------------------------------------------------------------------
+//  MIDI OUT
+// ------------------------------------------------------------------------
+// Web MIDI is Chrome 43+ / Firefox 108+ only — Safari has never shipped it on
+// macOS or iOS, and every iOS browser is WebKit underneath — and it needs a
+// secure context (localhost counts). Both are detected up front and reported in
+// the UI, rather than leaving a control that silently does nothing.
+const MIDI_SUPPORTED = typeof navigator?.requestMIDIAccess === "function";
+const CH = 0; // channel 1
+const VELOCITY = 0x64;
+
+function useMidiOut() {
+  const [status, setStatus] = useState(() =>
+    !MIDI_SUPPORTED ? "unsupported" : !window.isSecureContext ? "insecure" : "idle"
+  );
+  const [outputs, setOutputs] = useState([]);
+  const [portId, setPortId] = useState("");
+  const access = useRef(null);
+
+  const enable = useCallback(async () => {
+    if (!MIDI_SUPPORTED || !window.isSecureContext) return;
+    setStatus("asking");
+    try {
+      // no sysex: notes don't need it, and asking for it prompts harder
+      const a = await navigator.requestMIDIAccess();
+      const list = () =>
+        setOutputs([...a.outputs.values()].map((o) => ({ id: o.id, name: o.name })));
+      access.current = a;
+      list();
+      a.onstatechange = list; // ports appearing and going away
+      setStatus("ready");
+    } catch {
+      setStatus("denied");
+    }
+  }, []);
+
+  const port = access.current?.outputs.get(portId) || null;
+
+  const send = useCallback(
+    (midi, dur, at, stagger = 0) => {
+      if (!port) return;
+      // Tone schedules on the audio clock; output.send wants a performance.now()
+      // stamp, so rebase one onto the other. Both are ms-stable, which is all
+      // chord playback needs.
+      const t0 = performance.now() + (at - Tone.getContext().currentTime) * 1000;
+      [...midi]
+        .sort((a, b) => a - b) // inversion shifts leave midi unsorted; roll upward
+        .forEach((m, i) => {
+          const on = t0 + i * stagger * 1000;
+          port.send([0x90 | CH, m, VELOCITY], on);
+          port.send([0x80 | CH, m, 0], t0 + dur * 1000);
+        });
+    },
+    [port]
+  );
+
+  // hardware holds a note until told otherwise, so Stop has to be emphatic
+  const panic = useCallback(() => {
+    if (!port) return;
+    port.clear?.(); // drop note-offs still queued, or they arrive after the reset
+    port.send([0xb0 | CH, 123, 0]); // all notes off
+  }, [port]);
+
+  return { status, outputs, portId, setPortId, enable, send, panic, active: !!port };
+}
+
+// ------------------------------------------------------------------------
 //  UI
 // ------------------------------------------------------------------------
 const HUE = {
@@ -71,6 +137,27 @@ const HUE_LABEL = {
   build: "Build",
   tension: "Tension",
   outside: "Outside",
+};
+
+// what the Output control says before a port can be picked
+const MIDI_STATUS = {
+  unsupported: {
+    label: "No Web MIDI",
+    dead: true,
+    hint: "This browser has no Web MIDI. Safari has never shipped it, on macOS or iOS — Chrome or Firefox will work.",
+  },
+  insecure: {
+    label: "No Web MIDI",
+    dead: true,
+    hint: "Web MIDI needs a secure context — serve the page over HTTPS, or from localhost.",
+  },
+  idle: { label: "Enable MIDI", dead: false, hint: "Look for connected MIDI instruments" },
+  asking: { label: "Asking…", dead: true, hint: "Waiting on the browser's MIDI permission prompt" },
+  denied: {
+    label: "MIDI blocked",
+    dead: false,
+    hint: "The browser denied MIDI access. Allow it for this site, then click to retry.",
+  },
 };
 
 // choreography timings — the futures clear out, then the new column assembles
@@ -188,7 +275,10 @@ export default function ChordExplorer() {
   const playingRef = useRef(false); // read inside scheduled callbacks and effects
   const loopRef = useRef(false);
   const [query, setQuery] = useState("");
+  const [tensionDesc, setTensionDesc] = useState(true); // most tense first
   const { ensure, release } = useSynth();
+  const midi = useMidiOut();
+  const { send: midiSend, panic: midiPanic, active: midiActive } = midi;
   const uid = useRef(boot.prog?.length ?? 0);
 
   // choosing is a short piece of choreography: the futures fade, the chosen one
@@ -221,12 +311,16 @@ export default function ChordExplorer() {
   const current = prog.length ? prog[prog.length - 1] : null;
   const { inKey, colour, sus } = useMemo(() => optionsFrom(current, key), [current, key]);
 
-  // every possible next chord as one flat list, most tense at the top. Sort is
-  // stable, so within a tension band the engine's own ranking still shows through.
+  // every possible next chord as one flat list, ordered by tension. Sort is stable,
+  // so within a tension band the engine's own ranking still shows through — in
+  // either direction. Descending opens on the outside chords; ascending puts the
+  // resolutions up top, which is the view you want when you're looking for home.
   const futures = useMemo(
     () =>
-      [...inKey, ...colour, ...(susOn ? sus : [])].sort((a, b) => b.tension - a.tension),
-    [inKey, colour, sus, susOn]
+      [...inKey, ...colour, ...(susOn ? sus : [])].sort((a, b) =>
+        tensionDesc ? b.tension - a.tension : a.tension - b.tension
+      ),
+    [inKey, colour, sus, susOn, tensionDesc]
   );
 
   // the futures list is the whole vocabulary now, so it needs a way in
@@ -273,8 +367,14 @@ export default function ChordExplorer() {
 
   const playVoiced = useCallback(
     async (midi, dur = 1.1, when) => {
+      // ensure() even when routing to MIDI: the Transport and the clock that
+      // timestamps the messages both need a running audio context
       const synth = await ensure();
       const t = when ?? Tone.now();
+      if (midiActive) {
+        midiSend(midi, dur, t, arp && midi.length > 1 ? Math.min(dur * 0.22, 0.16) : 0);
+        return; // the port replaces the built-in synth rather than doubling it
+      }
       if (arp && midi.length > 1) {
         // roll the notes up low-to-high (inversion shifts leave midi unsorted)
         const notes = midiToNotes([...midi].sort((a, b) => a - b));
@@ -286,7 +386,7 @@ export default function ChordExplorer() {
         synth.triggerAttackRelease(midiToNotes(midi), dur, t);
       }
     },
-    [ensure, arp]
+    [ensure, arp, midiActive, midiSend]
   );
 
   const preview = useCallback(
@@ -374,10 +474,11 @@ export default function ChordExplorer() {
     t.position = 0;
     t.loop = false;
     release();
+    midiPanic();
     playingRef.current = false;
     setPlaying(false);
     setPlayingIdx(-1);
-  }, [release]);
+  }, [release, midiPanic]);
 
   const playAll = useCallback(async () => {
     if (playingRef.current) return stopPlayback(); // the button is Play/Stop
@@ -388,8 +489,11 @@ export default function ChordExplorer() {
     t.bpm.value = tempo;
     prog.forEach((c, i) => {
       t.schedule((time) => {
+        // through a ref, not the closure: a scheduled callback would otherwise
+        // keep the playVoiced it was built with, so switching MIDI output or
+        // toggling Arpeggio mid-run would go nowhere until the next Play
         // duration read at fire time, so a tempo change lands on the next chord
-        playVoiced(voicings[i], Tone.Time(atBeat(STEP)).toSeconds() * 0.92, time);
+        playVoicedRef.current(voicings[i], Tone.Time(atBeat(STEP)).toSeconds() * 0.92, time);
         Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
       }, atBeat(i * STEP));
     });
@@ -406,7 +510,7 @@ export default function ChordExplorer() {
     playingRef.current = true;
     setPlaying(true);
     t.start();
-  }, [prog, tempo, loop, ensure, playVoiced, voicings, stopPlayback]);
+  }, [prog, tempo, loop, ensure, voicings, stopPlayback]);
 
   // the toggles reach into a run already in progress
   useEffect(() => { Tone.getTransport().bpm.value = tempo; }, [tempo]);
@@ -415,11 +519,22 @@ export default function ChordExplorer() {
     if (playingRef.current) Tone.getTransport().loop = loop;
   }, [loop]);
 
+  // Held in a ref so neither effect below lists stopPlayback as a dependency:
+  // its identity changes with the chosen MIDI port, which would otherwise fire
+  // the cleanup — i.e. silently stop playback, and panic twice — every time you
+  // switched output. Switching output mid-run should just move the sound across.
+  const stopRef = useRef(stopPlayback);
+  const playVoicedRef = useRef(playVoiced);
+  useEffect(() => {
+    stopRef.current = stopPlayback;
+    playVoicedRef.current = playVoiced;
+  });
+
   // editing the progression invalidates what's scheduled against it
   useEffect(() => {
-    if (playingRef.current) stopPlayback();
-  }, [prog, root, mode, add7, voiceLead, stopPlayback]);
-  useEffect(() => stopPlayback, [stopPlayback]); // and stop on unmount
+    if (playingRef.current) stopRef.current();
+  }, [prog, root, mode, add7, voiceLead]);
+  useEffect(() => () => stopRef.current(), []); // and stop on unmount, only
 
   const undo = () => setProg((p) => p.slice(0, -1));
   const clear = () => setProg([]);
@@ -543,6 +658,38 @@ export default function ChordExplorer() {
             Loop
           </button>
 
+          <label className="ce-field">
+            <span>Output</span>
+            {midi.status === "ready" ? (
+              <select
+                value={midi.portId}
+                title="Send notes to an external instrument instead of the built-in synth"
+                onChange={(e) => {
+                  midiPanic(); // silence the port we're leaving, mid-note or not
+                  midi.setPortId(e.target.value);
+                }}
+              >
+                <option value="">Internal synth</option>
+                {midi.outputs.length ? (
+                  midi.outputs.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))
+                ) : (
+                  <option disabled>No MIDI outputs found</option>
+                )}
+              </select>
+            ) : (
+              <button
+                className="ce-toggle ce-midi"
+                onClick={midi.enable}
+                disabled={MIDI_STATUS[midi.status].dead}
+                title={MIDI_STATUS[midi.status].hint}
+              >
+                {MIDI_STATUS[midi.status].label}
+              </button>
+            )}
+          </label>
+
           <label className="ce-field ce-tempo">
             <span>Tempo {tempo}</span>
             <input
@@ -615,7 +762,9 @@ export default function ChordExplorer() {
             fromMidi={fromMidi}
             voiceLead={voiceLead}
             exiting={exiting}
-            listKey={`${prog.length}|${root}|${mode}|${add7}|${susOn}|${voiceLead}`}
+            listKey={`${prog.length}|${root}|${mode}|${add7}|${susOn}|${voiceLead}|${tensionDesc}`}
+            tensionDesc={tensionDesc}
+            onFlipSort={() => setTensionDesc((v) => !v)}
             query={query}
             onQuery={setQuery}
             hiddenBy={hiddenBy}
@@ -645,7 +794,7 @@ const MAX_TENSION = 4.5; // the top of the tension meter, matching the engine's 
 
 function FutureList({
   options, total, current, keyRoot, fromMidi, voiceLead, exiting, listKey, listRef,
-  query, onQuery, hiddenBy, onPick, onPreview,
+  query, onQuery, hiddenBy, tensionDesc, onFlipSort, onPick, onPreview,
 }) {
   const filtering = query.trim() !== "";
   // Enter commits the top match, so "fsus4 ⏎" plays the chord you came for. The
@@ -673,12 +822,21 @@ function FutureList({
             onChange={(e) => onQuery(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <span
+          {filtering && (
+            <span className="ce-futures-count">{options.length}/{total}</span>
+          )}
+          <button
+            type="button"
             className="ce-futures-axis"
-            title={filtering ? undefined : "Rows are ordered by how much tension the chord carries"}
+            onClick={onFlipSort}
+            aria-label={`Sorted by tension, ${tensionDesc ? "most tense first" : "least tense first"}. Flip the order.`}
+            title={
+              (tensionDesc ? "Most tense first" : "Least tense first") +
+              " — click to flip the order"
+            }
           >
-            {filtering ? `${options.length} of ${total}` : "tension ↓"}
-          </span>
+            tension {tensionDesc ? "↓" : "↑"}
+          </button>
         </span>
       </div>
       {/* keyed on the whole option set so the assemble animation replays */}
@@ -723,7 +881,6 @@ function FutureRow({ opt, i, keyRoot, dist, state, onPick, onPreview }) {
         "ce-future" + (opt.resolution ? " resolve" : "") + (state ? " " + state : "")
       }
       style={{ "--c": HUE[hueOf(opt.func)], "--i": i, "--t": opt.tension / MAX_TENSION }}
-      onMouseEnter={() => onPreview(opt)}
       onClick={() => onPick(opt, ref.current)}
       title={
         `${opt.name} — ${notes}` +
@@ -732,7 +889,8 @@ function FutureRow({ opt, i, keyRoot, dist, state, onPick, onPreview }) {
       }
     >
       <span className="ce-fu-tension" aria-hidden="true"><i /></span>
-      <span className="ce-fu-name">{opt.name}</span>
+      {/* hovering auditions the chord — the name alone, so reading a row is silent */}
+      <span className="ce-fu-name" onMouseEnter={() => onPreview(opt)}>{opt.name}</span>
       <span className="ce-fu-roman">{opt.roman}</span>
       <span className="ce-fu-dist">
         {dist != null && (
@@ -975,6 +1133,8 @@ const CSS = `
   border:1px solid var(--line); background:var(--panel); color:var(--muted); cursor:pointer; align-self:flex-end;
 }
 .ce-toggle.on{background:var(--ink); color:var(--panel); border-color:var(--ink);}
+.ce-midi{align-self:auto;} /* sits under a field label, not flush with the toggle row */
+.ce-midi:disabled{opacity:.5; cursor:default;}
 
 .ce-eyebrow{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted);}
 
@@ -1085,7 +1245,14 @@ const CSS = `
 .ce-futures-tools{display:flex; align-items:center; gap:9px; flex:0 0 auto;}
 .ce-futures-axis{
   font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.06em;
-  min-width:6.2em; text-align:right; /* holds width as the count swaps in */
+  min-width:6.2em; text-align:right; cursor:pointer;
+  padding:3px 5px; margin:-3px -5px; border:0; border-radius:6px; background:transparent;
+  transition:background .1s ease, color .1s ease;
+}
+.ce-futures-axis:hover{background:var(--bg); color:var(--ink);}
+.ce-futures-axis:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
+.ce-futures-count{
+  font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.04em;
 }
 .ce-filter{
   width:120px; font-family:var(--mono); font-size:11px; color:var(--ink);
@@ -1127,7 +1294,15 @@ const CSS = `
   display:block; width:5px; border-radius:3px; background:var(--c);
   height:calc(4px + var(--t) * 12px);
 }
-.ce-fu-name{font-size:14.5px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+/* the name is the audition target — give it a hit area and say so on hover */
+.ce-fu-name{
+  font-size:14.5px; font-weight:600; letter-spacing:-.01em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  justify-self:start; max-width:100%;
+  padding:1px 4px; margin:-1px -4px; border-radius:5px;
+  transition:background .12s ease, color .12s ease;
+}
+.ce-fu-name:hover{background:color-mix(in srgb, var(--c) 20%, transparent); color:var(--c);}
 .ce-fu-roman{font-family:var(--mono); font-size:10.5px; color:var(--c); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .ce-fu-dist{display:flex; justify-content:flex-end;}
 .ce-fu-dist .ce-chip-dist{margin-top:0;}
