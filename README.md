@@ -62,11 +62,11 @@ Chrome 43+ or Firefox 108+ — Safari has never shipped Web MIDI, on macOS or iO
 secure context, so HTTPS or localhost. The control says which of those is missing rather
 than sitting there dead. Notes go out on channel 1.
 
-Every chord you could play next is listed to the right of the progression, one line
-each — name, roman numeral, the voice movement picking it would cost (Δ), and what the
-move *does*. They're **ordered by tension**, most tense at the top, so the list reads as
-a gradient from "outside" down to "home" — click **tension** in the header to flip that,
-and the resolutions rise to the top instead. Hovering a chord's **name** auditions it, so
+Every chord you could play next is listed below the progression, one line
+each — name, roman numeral, the notes in the chord, the voice movement picking it would
+cost (Δ), and what the move *does*. They're **ordered by tension**, least tense first, so
+the resolutions sit at the top and the list runs out toward "outside" — click **tension**
+in the header to flip it and open on the outside chords instead. Hovering a chord's **name** auditions it, so
 you can run down the column and hear the options without committing; clicking anywhere on
 the row commits it, and the row flies into the roll and bursts into its note pills while
 the next set of futures assembles.
@@ -90,6 +90,11 @@ Colour is the whole point: it encodes what a chord *does*.
 The progression itself is a **piano roll**: each voice sits at its pitch height, so
 common tones line up across chords and the voice leading is visible. Each note pill
 carries its semitone step from the previous chord, and plays on its own when clicked.
+
+**Drag a chord tile left or right to reorder it** — the voice leading re-solves as you
+drag, so you can see what a different order costs before you drop it. The **×** on a tile
+removes that chord. Both work from the keyboard too: focus a tile, then **Alt+←/→** to
+move it and **Delete** to remove it.
 
 ## Design notes (why it is the way it is)
 

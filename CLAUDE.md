@@ -131,17 +131,37 @@ The engine, reading top to bottom:
   chord** at its right edge — voices paired by ascending pitch, the same pairing the
   connectors use, so a voice with no counterpart (a triad growing into a seventh) is
   simply left unlabelled; the chord tile under each column plays the whole chord
-  (`onPlay`). The column itself is a plain container — buttons can't nest.
-- **`FutureList`** — the next-chord options, sitting beside the roll in the same
-  progression view as the possible futures the current chord opens onto. One flat list
+  (`onPlay`). The column itself is a plain container — buttons can't nest, which is also why
+  the remove **×** is a sibling of the tile positioned over its corner rather than inside it.
+  The first tile has no Δ to show, so it renders a `ce-chip-ghost` (`visibility:hidden`)
+  rather than nothing — same element, so the tiles stay exactly the same height.
+- **Reordering** is pointer-based, not HTML5 drag-and-drop: the columns are a uniform grid,
+  so the target index is arithmetic on `clientX` against `colsRef`, and `prog` is reordered
+  *live* as you cross a boundary, which lets you watch the voice leading re-solve mid-drag.
+  `clickBlocked` is a **separate** ref from `drag`, and that separation is load-bearing: the
+  click that ends a drag fires in the same task as `pointerup`, after `onDragEnd` has already
+  cleared `drag.current`, so a flag living on the drag object is gone by the time the click
+  handler reads it — and the chord you just moved plays. It is released on the next tick.
+  Drag is mouse-only, so the tile also takes **Alt+←/→** to move and **Delete/Backspace** to
+  remove.
+- **`FutureList`** — the next-chord options, sitting **below** the roll inside the same
+  progression view, as the possible futures the current chord opens onto. They were briefly
+  side by side; sharing the width capped the roll at about five chords before it had to
+  scroll, and the roll is the thing you're reading, so the stage stacks instead. A useful
+  side effect: adding a chord no longer reflows the futures list sideways, so the flight
+  origin is stable without the offset-within-the-list dance having to absorb it. One flat list
   (diatonic + colour + suspensions merged, the sort is stable so the engine's ranking
-  still shows through within a tension band), **ordered by tension descending** so the
-  top of the list is the furthest from home. Each `FutureRow` is one line —
-  tension meter, name, roman, Δ-from-here, description — so a couple of dozen fit
-  vertically. **Hovering the name** auditions the chord — the name only, so scanning a row's
-  description or Δ stays silent; clicking anywhere on the row commits it. The `tension ↓`
-  label in the head is a button that flips the sort: descending opens on the outside chords,
-  ascending puts the resolutions on top. Direction is deliberately **not** in the URL, same
+  still shows through within a tension band), **ordered by tension ascending by default** so
+  the resolutions sit up top. Each `FutureRow` is one line — tension meter, name, roman,
+  notes, Δ-from-here, description — so a couple of dozen fit vertically. The `em` values in
+  that grid resolve against the **button's own font-size** (the UA default ~13.3px), not the
+  16px root; the notes track is sized for the widest spelling a chord can have — four flat
+  names, which `E♭m7` (ii7 in D♭ major) actually produces. Below 560px the notes column is
+  the one that gives way, since it's derivable and repeated in the row's tooltip, and the
+  name must stay whole. **Hovering the name** auditions the chord — the name only, so
+  scanning a row's description or Δ stays silent; clicking anywhere on the row commits it.
+  The `tension ↑` label in the head is a button that flips the sort: ascending puts the
+  resolutions on top, descending opens on the outside chords. Direction is deliberately **not** in the URL, same
   as the filter — both are ways of looking at the list, not part of the progression. There is
   no chord-tile grid below any more; this list replaced it.
 - **Filtering the futures** — `normQuery` / `matchesQuery` fold the display spellings down

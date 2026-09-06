@@ -275,7 +275,7 @@ export default function ChordExplorer() {
   const playingRef = useRef(false); // read inside scheduled callbacks and effects
   const loopRef = useRef(false);
   const [query, setQuery] = useState("");
-  const [tensionDesc, setTensionDesc] = useState(true); // most tense first
+  const [tensionDesc, setTensionDesc] = useState(false); // least tense first
   const { ensure, release } = useSynth();
   const midi = useMidiOut();
   const { send: midiSend, panic: midiPanic, active: midiActive } = midi;
@@ -313,8 +313,8 @@ export default function ChordExplorer() {
 
   // every possible next chord as one flat list, ordered by tension. Sort is stable,
   // so within a tension band the engine's own ranking still shows through — in
-  // either direction. Descending opens on the outside chords; ascending puts the
-  // resolutions up top, which is the view you want when you're looking for home.
+  // either direction. Ascending is the default: the resolutions sit up top, which
+  // is what you reach for most. Flip it to open on the outside chords instead.
   const futures = useMemo(
     () =>
       [...inKey, ...colour, ...(susOn ? sus : [])].sort((a, b) =>
@@ -536,6 +536,80 @@ export default function ChordExplorer() {
   }, [prog, root, mode, add7, voiceLead]);
   useEffect(() => () => stopRef.current(), []); // and stop on unmount, only
 
+  // --- reordering and removing chords -------------------------------------
+  // Pointer-based rather than HTML5 drag-and-drop: the columns are a uniform
+  // grid, so the target index is just arithmetic on clientX, and reordering
+  // `prog` live means you watch the voice leading re-solve as you drag.
+  const [dragIdx, setDragIdx] = useState(-1);
+  const drag = useRef(null);
+  // separate from `drag`, which is cleared on pointerup — the click that ends a
+  // drag fires *after* that, and would otherwise play the chord you just moved
+  const clickBlocked = useRef(false);
+  const dragMoved = useCallback(() => clickBlocked.current, []);
+
+  const moveChord = useCallback((from, to) => {
+    setProg((p) => {
+      if (to < 0 || to >= p.length || from === to) return p;
+      const next = [...p];
+      next.splice(to, 0, ...next.splice(from, 1));
+      return next;
+    });
+  }, []);
+
+  const removeChord = useCallback((i) => setProg((p) => p.filter((_, j) => j !== i)), []);
+
+  const onDragStart = useCallback((i, e) => {
+    if (e.button !== 0) return;
+    drag.current = { idx: i, startX: e.clientX, moved: false };
+    setDragIdx(i);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }, []);
+
+  const onDragMove = useCallback(
+    (e) => {
+      const d = drag.current;
+      if (!d) return;
+      // a few px of slop, so a click that wobbles still plays the chord
+      if (!d.moved && Math.abs(e.clientX - d.startX) < 4) return;
+      d.moved = true;
+      clickBlocked.current = true; // suppress the click this drag will end with
+      const base = colsRef.current?.getBoundingClientRect();
+      if (!base) return;
+      const span = ROLL.COL + ROLL.GAP;
+      const to = Math.max(0, Math.min(prog.length - 1, Math.floor((e.clientX - base.left) / span)));
+      if (to !== d.idx) {
+        moveChord(d.idx, to);
+        d.idx = to;
+        setDragIdx(to);
+      }
+    },
+    [prog.length, moveChord]
+  );
+
+  const onDragEnd = useCallback(() => {
+    setDragIdx(-1);
+    const d = drag.current;
+    drag.current = null;
+    // the click lands in the same task as pointerup, so the flag has to outlive
+    // this handler — release it on the next tick, once that click has passed
+    if (d?.moved) setTimeout(() => { clickBlocked.current = false; }, 0);
+    else clickBlocked.current = false;
+  }, []);
+
+  // drag is mouse-only, so the same moves live on the keyboard
+  const onTileKey = useCallback(
+    (i, e) => {
+      if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        moveChord(i, i + (e.key === "ArrowLeft" ? -1 : 1));
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeChord(i);
+      }
+    },
+    [moveChord, removeChord]
+  );
+
   const undo = () => setProg((p) => p.slice(0, -1));
   const clear = () => setProg([]);
 
@@ -742,13 +816,20 @@ export default function ChordExplorer() {
                 keyRoot={key.root}
                 spawn={spawn}
                 colsRef={colsRef}
+                dragIdx={dragIdx}
+                dragMoved={dragMoved}
                 onPlay={(i) => playVoiced(voicings[i])}
                 onPlayNote={(m) => playVoiced([m])}
                 onInvert={invert}
+                onRemove={removeChord}
+                onDragStart={onDragStart}
+                onDragMove={onDragMove}
+                onDragEnd={onDragEnd}
+                onTileKey={onTileKey}
               />
             ) : (
               <p className="ce-empty">
-                Pick a chord from the futures — it plays, and the roll starts here.
+                Pick a chord below — it plays, and the roll starts here.
               </p>
             )}
           </div>
@@ -892,6 +973,7 @@ function FutureRow({ opt, i, keyRoot, dist, state, onPick, onPreview }) {
       {/* hovering auditions the chord — the name alone, so reading a row is silent */}
       <span className="ce-fu-name" onMouseEnter={() => onPreview(opt)}>{opt.name}</span>
       <span className="ce-fu-roman">{opt.roman}</span>
+      <span className="ce-fu-notes">{notes}</span>
       <span className="ce-fu-dist">
         {dist != null && (
           <span
@@ -932,7 +1014,10 @@ const Chevron = ({ up }) => (
   </svg>
 );
 
-function PianoRoll({ prog, voicings, playingIdx, keyRoot, spawn, colsRef, onPlay, onPlayNote, onInvert }) {
+function PianoRoll({
+  prog, voicings, playingIdx, keyRoot, spawn, colsRef, dragIdx, dragMoved,
+  onPlay, onPlayNote, onInvert, onRemove, onDragStart, onDragMove, onDragEnd, onTileKey,
+}) {
   const { ROW, CELL, COL, GAP } = ROLL;
   const all = voicings.flat();
   if (!all.length) return null;
@@ -985,7 +1070,11 @@ function PianoRoll({ prog, voicings, playingIdx, keyRoot, spawn, colsRef, onPlay
             return (
               <div
                 key={c.id}
-                className={"ce-roll-col" + (i === playingIdx ? " playing" : "")}
+                className={
+                  "ce-roll-col" +
+                  (i === playingIdx ? " playing" : "") +
+                  (i === dragIdx ? " dragging" : "")
+                }
                 style={{ "--c": HUE[hueOf(c.func)], width: COL }}
               >
                 <span className="ce-roll-notes" style={{ height: bandH }}>
@@ -1021,22 +1110,41 @@ function PianoRoll({ prog, voicings, playingIdx, keyRoot, spawn, colsRef, onPlay
                   <button
                     type="button"
                     className="ce-roll-tile"
-                    onClick={() => onPlay(i)}
-                    title={`${c.name}${inverted ? "/" + bass : ""} · ${notes.join(" ")} · ${c.move}`}
+                    onPointerDown={(e) => onDragStart(i, e)}
+                    onPointerMove={onDragMove}
+                    onPointerUp={onDragEnd}
+                    onPointerCancel={onDragEnd}
+                    onClick={() => { if (!dragMoved()) onPlay(i); }}
+                    onKeyDown={(e) => onTileKey(i, e)}
+                    aria-label={`${c.name}, chord ${i + 1} of ${prog.length}. Alt with the arrow keys reorders, Delete removes.`}
+                    title={`${c.name}${inverted ? "/" + bass : ""} · ${notes.join(" ")} · ${c.move}\nDrag to reorder · Alt+← / Alt+→ · Delete to remove`}
                   >
                     <span className="ce-chip-name">
                       {c.name}
                       {inverted && <span className="ce-chip-slash">/{bass}</span>}
                     </span>
                     <span className="ce-chip-roman">{c.roman}</span>
-                    {dist != null && (
+                    {/* the first chord has nothing to measure from — hold the slot
+                        open with a ghost so every tile is the same height */}
+                    {dist != null ? (
                       <span
                         className={"ce-chip-dist" + (dist <= 2 ? " smooth" : dist >= 7 ? " far" : "")}
                         title={`${dist} semitone${dist === 1 ? "" : "s"} of voice movement from the previous chord`}
                       >
                         Δ{dist}
                       </span>
+                    ) : (
+                      <span className="ce-chip-dist ce-chip-ghost" aria-hidden="true">Δ0</span>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    className="ce-roll-del"
+                    onClick={() => onRemove(i)}
+                    aria-label={`Remove ${c.name} from the progression`}
+                    title={`Remove ${c.name}`}
+                  >
+                    ×
                   </button>
                   <span className="ce-roll-invert">
                     <button
@@ -1159,10 +1267,11 @@ const CSS = `
 .ce-curve-line{fill:none; stroke:var(--ink); stroke-width:1; opacity:.55; vector-effect:non-scaling-stroke;}
 
 /* stage: the roll on the left, the futures fanning out on the right */
-/* the roll takes only the width its chords need, so a short progression leaves
-   the futures room to breathe; past that it shrinks and scrolls internally */
-.ce-stage{display:flex; align-items:flex-start; gap:18px;}
-.ce-roll{flex:0 1 auto; min-width:0; overflow-x:auto; padding:2px 0 4px;}
+/* Stacked, not side by side: sharing the width capped the roll at about five
+   chords before it had to scroll, and the roll is the thing you're reading. Full
+   width buys roughly eleven, and the futures get the whole width underneath. */
+.ce-stage{display:flex; flex-direction:column; align-items:stretch; gap:16px;}
+.ce-roll{width:100%; min-width:0; overflow-x:auto; padding:2px 0 4px;}
 .ce-roll-inner{position:relative;}
 .ce-roll-links{position:absolute; top:0; left:0; z-index:0; overflow:visible; pointer-events:none;}
 .ce-roll-link{stroke:var(--ink); stroke-width:1; opacity:.13;}
@@ -1227,7 +1336,32 @@ const CSS = `
   color:#b0642a; background:color-mix(in srgb, #b0642a 15%, transparent);
 }
 
-.ce-roll-tilewrap{display:flex; align-items:stretch; gap:4px;}
+/* holds the Δ slot open on the first tile, which has nothing to measure from */
+.ce-chip-ghost{visibility:hidden;}
+
+.ce-roll-tilewrap{position:relative; display:flex; align-items:stretch; gap:4px;}
+.ce-roll-tile{cursor:grab; touch-action:none; user-select:none;}
+.ce-roll-col.dragging{z-index:3;}
+.ce-roll-col.dragging .ce-roll-tile{
+  cursor:grabbing; background:var(--panel);
+  box-shadow:0 8px 20px -12px rgba(34,30,24,.7), 0 0 0 1px var(--c) inset;
+}
+.ce-roll-col.dragging .ce-roll-note{border-color:var(--c);}
+
+/* remove: quiet until you go looking for it, but always reachable by keyboard */
+.ce-roll-del{
+  position:absolute; top:-7px; right:-7px; z-index:2;
+  width:18px; height:18px; padding:0; line-height:1; font-size:13px;
+  display:flex; align-items:center; justify-content:center;
+  border:1px solid var(--line); border-radius:50%;
+  background:var(--bg); color:var(--muted); cursor:pointer;
+  opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease;
+}
+.ce-roll-col:hover .ce-roll-del,
+.ce-roll-col:focus-within .ce-roll-del{opacity:1;}
+.ce-roll-del:hover{background:var(--tension); border-color:var(--tension); color:var(--panel);}
+.ce-roll-del:focus-visible{opacity:1; outline:2px solid var(--ink); outline-offset:1px;}
+@media (hover:none){.ce-roll-del{opacity:1;}} /* no hover on touch — just show it */
 .ce-roll-tilewrap .ce-roll-tile{flex:1 1 auto; min-width:0;}
 .ce-roll-invert{display:flex; flex-direction:column; gap:3px; flex:0 0 auto;}
 .ce-inv-btn{
@@ -1240,7 +1374,10 @@ const CSS = `
 .ce-inv-btn:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
 
 /* futures: every chord that could come next, one line each, most tense on top */
-.ce-futures{flex:1 1 auto; min-width:min(430px, 100%); display:flex; flex-direction:column; gap:7px;}
+.ce-futures{
+  width:100%; display:flex; flex-direction:column; gap:7px;
+  padding-top:14px; border-top:1px solid var(--line2); /* the seam the roll sits above */
+}
 .ce-futures-head{display:flex; align-items:center; justify-content:space-between; gap:10px;}
 .ce-futures-tools{display:flex; align-items:center; gap:9px; flex:0 0 auto;}
 .ce-futures-axis{
@@ -1278,7 +1415,10 @@ const CSS = `
 
 .ce-future{
   --c:var(--home); --t:0;
-  display:grid; grid-template-columns:14px 5.4em 4.4em 2.9em minmax(0,1fr);
+  /* em here resolves against the button's own font-size (the UA default ~13.3px),
+     not the 16px root. The notes track fits the widest spelling a chord can have:
+     four flat names — E♭m7 is ii7 in D♭ major, and spells "E♭ G♭ B♭ D♭". */
+  display:grid; grid-template-columns:14px 5.4em 4.4em 9.6em 2.9em minmax(0,1fr);
   align-items:center; gap:8px; width:100%; text-align:left;
   padding:3px 8px 3px 4px; border:1px solid transparent; border-radius:7px;
   background:transparent; color:var(--ink); cursor:pointer;
@@ -1304,6 +1444,11 @@ const CSS = `
 }
 .ce-fu-name:hover{background:color-mix(in srgb, var(--c) 20%, transparent); color:var(--c);}
 .ce-fu-roman{font-family:var(--mono); font-size:10.5px; color:var(--c); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-notes{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ce-future:hover .ce-fu-notes{color:var(--ink);}
 .ce-fu-dist{display:flex; justify-content:flex-end;}
 .ce-fu-dist .ce-chip-dist{margin-top:0;}
 .ce-fu-move{
@@ -1331,15 +1476,11 @@ const CSS = `
 .ce-leg i{width:11px; height:11px; border-radius:3px; display:inline-block;}
 .ce-leg-note{font-size:11px; color:var(--muted); font-style:italic; margin-left:auto;}
 
-@media (max-width:820px){
-  /* not enough width to sit side by side — futures stack under the roll */
-  .ce-stage{flex-direction:column;}
-  .ce-roll{width:100%;}
-  .ce-futures{flex:1 1 auto; width:100%;}
-}
 @media (max-width:560px){
   .ce-controls{width:100%;}
-  .ce-future{grid-template-columns:12px 4.6em 4.2em 2.7em minmax(0,1fr); gap:6px;}
+  /* the notes are the droppable column here — the name has to stay whole */
+  .ce-fu-notes{display:none;}
+  .ce-future{grid-template-columns:12px 5em 4.2em 2.7em minmax(0,1fr); gap:6px;}
   .ce-fu-move{font-size:11px;}
 }
 @media (prefers-reduced-motion:reduce){
