@@ -562,13 +562,19 @@ export default function ChordExplorer() {
     if (e.button !== 0) return;
     drag.current = { idx: i, startX: e.clientX, moved: false };
     setDragIdx(i);
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    // deliberately no setPointerCapture: reordering moves the captured node in
+    // the DOM, which implicitly releases the capture, so it can't be relied on
+    // to deliver pointerup. The window listeners below do that job instead.
   }, []);
 
   const onDragMove = useCallback(
     (e) => {
       const d = drag.current;
       if (!d) return;
+      // pointermove also fires on a plain hover. If the button is no longer
+      // down, a previous drag failed to end — close it out rather than treating
+      // mouse-overs as a drag and shuffling the progression under the cursor.
+      if (e.buttons === 0) return endDragRef.current();
       // a few px of slop, so a click that wobbles still plays the chord
       if (!d.moved && Math.abs(e.clientX - d.startX) < 4) return;
       d.moved = true;
@@ -595,6 +601,29 @@ export default function ChordExplorer() {
     if (d?.moved) setTimeout(() => { clickBlocked.current = false; }, 0);
     else clickBlocked.current = false;
   }, []);
+
+  // The drag is driven from the window, not the tile: release the button over a
+  // gap, over the note pills, or outside the roll entirely and the tile's own
+  // pointerup never fires, leaving the drag live — after which every hover
+  // reorders the progression.
+  const endDragRef = useRef(onDragEnd);
+  useEffect(() => { endDragRef.current = onDragEnd; });
+  const dragging = dragIdx >= 0;
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e) => onDragMove(e);
+    const end = () => endDragRef.current();
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", end); // released outside the window
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", end);
+    };
+  }, [dragging, onDragMove]);
 
   // drag is mouse-only, so the same moves live on the keyboard
   const onTileKey = useCallback(
@@ -823,8 +852,6 @@ export default function ChordExplorer() {
                 onInvert={invert}
                 onRemove={removeChord}
                 onDragStart={onDragStart}
-                onDragMove={onDragMove}
-                onDragEnd={onDragEnd}
                 onTileKey={onTileKey}
               />
             ) : (
@@ -1016,7 +1043,7 @@ const Chevron = ({ up }) => (
 
 function PianoRoll({
   prog, voicings, playingIdx, keyRoot, spawn, colsRef, dragIdx, dragMoved,
-  onPlay, onPlayNote, onInvert, onRemove, onDragStart, onDragMove, onDragEnd, onTileKey,
+  onPlay, onPlayNote, onInvert, onRemove, onDragStart, onTileKey,
 }) {
   const { ROW, CELL, COL, GAP } = ROLL;
   const all = voicings.flat();
@@ -1111,9 +1138,6 @@ function PianoRoll({
                     type="button"
                     className="ce-roll-tile"
                     onPointerDown={(e) => onDragStart(i, e)}
-                    onPointerMove={onDragMove}
-                    onPointerUp={onDragEnd}
-                    onPointerCancel={onDragEnd}
                     onClick={() => { if (!dragMoved()) onPlay(i); }}
                     onKeyDown={(e) => onTileKey(i, e)}
                     aria-label={`${c.name}, chord ${i + 1} of ${prog.length}. Alt with the arrow keys reorders, Delete removes.`}

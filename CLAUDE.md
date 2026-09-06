@@ -148,6 +148,17 @@ The engine, reading top to bottom:
   click that ends a drag fires in the same task as `pointerup`, after `onDragEnd` has already
   cleared `drag.current`, so a flag living on the drag object is gone by the time the click
   handler reads it — and the chord you just moved plays. It is released on the next tick.
+
+  **The move/up listeners live on `window`, not the tile, and `setPointerCapture` is
+  deliberately not used.** This was a bug: capture is implicitly released when the captured
+  node is removed from the document, and reordering *moves* that node, so the capture is gone
+  after the first boundary crossing. Release the button anywhere that isn't a tile — over the
+  note pills, in a gap, down in the futures list — and the tile's own `pointerup` never fires,
+  leaving the drag live. Since `pointermove` also fires on a **plain hover**, every subsequent
+  mouse-over then reordered the progression. `onDragMove` additionally bails when
+  `e.buttons === 0`, which is the invariant that makes a leaked drag self-heal rather than
+  eat the next hover. Any test that drags tile-centre to tile-centre passes regardless of all
+  this, because the release happens to land on a tile — aim somewhere else.
   Drag is mouse-only, so the tile also takes **Alt+←/→** to move and **Delete/Backspace** to
   remove.
 - **`FutureList`** — the next-chord options, sitting **below** the roll inside the same
