@@ -1,5 +1,27 @@
-import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import * as Tone from "tone";
+import {
+  SHARP,
+  nameOf,
+  mod12,
+  hueOf,
+  chordNoteNames,
+  rootPositionMidi,
+  voiceLeadMidi,
+  applyInversion,
+  computeVoicings,
+  midiToNotes,
+  voicingDistance,
+  voiceSteps,
+  optionDistance,
+  bassNameOf,
+  resolveKey,
+  suspensionsFor,
+  isResolution,
+  motionLabel,
+  moveDescription,
+  optionsFrom,
+} from "./harmony.js";
 
 /* ------------------------------------------------------------------ *
  *  CHORD PATHS — a functional-harmony explorer
@@ -7,472 +29,6 @@ import * as Tone from "tone";
  *  move tagged by what it *does* (root motion + harmonic function).
  *  Colour encodes function: home / build / tension / outside.
  * ------------------------------------------------------------------ */
-
-// --- pitch-class naming -------------------------------------------------
-const SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const FLAT = ["C", "D♭", "D", "E♭", "E", "F", "G♭", "G", "A♭", "A", "B♭", "B"];
-const FLAT_KEYS = new Set([1, 3, 5, 6, 8, 10]); // roots that read nicer in flats
-const nameOf = (pc, root) => (FLAT_KEYS.has(root) ? FLAT : SHARP)[((pc % 12) + 12) % 12];
-
-// --- scales -------------------------------------------------------------
-const STEPS = {
-  major: [0, 2, 4, 5, 7, 9, 11],
-  minor: [0, 2, 3, 5, 7, 8, 10], // natural minor; harmonic-minor dominant added as colour
-  mixolydian: [0, 2, 4, 5, 7, 9, 10], // major with a ♭7 — that flat-seventh colour
-};
-const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII"];
-// scale degrees written with a ♭ prefix on their roman (flattened vs the major scale)
-const FLAT_DEG = { mixolydian: new Set([6]) }; // ♭VII
-const romanFor = (mode, d, q) =>
-  (FLAT_DEG[mode]?.has(d) ? "♭" : "") +
-  (q.upper ? ROMAN[d] : ROMAN[d].toLowerCase()) +
-  q.romanSuffix;
-
-// harmonic function + a rough "distance from home" tension value, per degree
-const FUNC = {
-  major: [
-    ["tonic", 0], ["predominant", 2], ["tonic", 1], ["predominant", 2],
-    ["dominant", 3], ["tonic", 1], ["dominant", 3],
-  ],
-  minor: [
-    ["tonic", 0], ["predominant", 2], ["tonic", 1], ["predominant", 2],
-    ["dominant", 2.5], ["tonic", 1], ["subtonic", 2.5],
-  ],
-  mixolydian: [
-    ["tonic", 0], ["predominant", 2], ["tonic", 1.5], ["predominant", 2],
-    ["dominant", 2], ["tonic", 1], ["subtonic", 2.5],
-  ],
-};
-
-// --- classify a stack of thirds into a chord quality --------------------
-function classify(intervals) {
-  const has = (x) => intervals.includes(x);
-  // suspended: no 3rd, a 2nd or 4th standing in for it (quality-neutral)
-  if (!has(3) && !has(4) && (has(5) || has(2))) {
-    const s = has(5) ? "sus4" : "sus2";
-    return { triad: "sus", seventh: null, suffix: s, romanSuffix: s, upper: true };
-  }
-  let triad;
-  if (has(4) && has(7)) triad = "maj";
-  else if (has(3) && has(7)) triad = "min";
-  else if (has(3) && has(6)) triad = "dim";
-  else if (has(4) && has(8)) triad = "aug";
-  else triad = "maj";
-  let seventh = null;
-  if (has(11)) seventh = "M7";
-  else if (has(10)) seventh = "m7";
-  else if (has(9)) seventh = "d7";
-
-  let suffix = "", romanSuffix = "", upper = triad === "maj" || triad === "aug";
-  if (triad === "maj") {
-    if (seventh === "M7") { suffix = "maj7"; romanSuffix = "maj7"; }
-    else if (seventh === "m7") { suffix = "7"; romanSuffix = "7"; }
-  } else if (triad === "min") {
-    suffix = "m";
-    if (seventh === "m7") { suffix = "m7"; romanSuffix = "7"; }
-    else if (seventh === "M7") { suffix = "m(maj7)"; romanSuffix = "maj7"; }
-  } else if (triad === "dim") {
-    suffix = "°"; romanSuffix = "°";
-    if (seventh === "m7") { suffix = "m7♭5"; romanSuffix = "ø7"; }
-    else if (seventh === "d7") { suffix = "°7"; romanSuffix = "°7"; }
-  } else if (triad === "aug") {
-    suffix = "+"; romanSuffix = "+";
-  }
-  return { triad, seventh, suffix, romanSuffix, upper };
-}
-
-// map function -> palette role
-function hueOf(func) {
-  if (func === "tonic") return "home";
-  if (func === "predominant" || func === "subtonic") return "build";
-  if (func === "dominant") return "tension";
-  return "outside"; // secondary / borrowed
-}
-
-const mod12 = (n) => ((n % 12) + 12) % 12;
-
-// the distinct pitch classes of a chord, in chord-tone order (root, 3rd, 5th, 7th…)
-function chordPitchClasses(chord) {
-  const seen = new Set();
-  const out = [];
-  chord.intervals.forEach((i) => {
-    const pc = mod12(chord.rootPc + i);
-    if (!seen.has(pc)) { seen.add(pc); out.push(pc); }
-  });
-  return out;
-}
-
-// the note names of a chord's tones, spelled to suit the key
-function chordNoteNames(chord, keyRoot) {
-  return chordPitchClasses(chord).map((pc) => nameOf(pc, keyRoot));
-}
-
-// midi note of pitch-class `pc` placed in the octave closest to `target`
-const nearestMidi = (pc, target) => pc + 12 * Math.round((target - pc) / 12);
-
-// plain root position — the chord's own tones, stacked from C4
-function rootPositionMidi(chord) {
-  const rootMidi = 60 + mod12(chord.rootPc); // C4..B4
-  return chord.intervals.map((i) => rootMidi + i);
-}
-
-// voice-led realisation: place each new tone in the octave nearest to the
-// previous chord's notes, so common tones hold and the rest step. Inversions
-// fall out of this — no explicit inversion bookkeeping needed.
-function voiceLeadMidi(prevMidi, chord) {
-  const pcs = chordPitchClasses(chord);
-  if (!prevMidi || !prevMidi.length) {
-    // first chord: settle a plain root position around A3–C4
-    const rootMidi = nearestMidi(chord.rootPc, 57);
-    return chord.intervals.map((i) => rootMidi + i).sort((a, b) => a - b);
-  }
-  return pcs
-    .map((pc) => {
-      let best = null, bestDist = Infinity;
-      for (const p of prevMidi) {
-        const cand = nearestMidi(pc, p);
-        const d = Math.abs(cand - p);
-        if (d < bestDist) { bestDist = d; best = cand; }
-      }
-      return best;
-    })
-    .sort((a, b) => a - b);
-}
-
-// "inversion scrolling": roll a voicing by octaves at its extremes. inv > 0 moves
-// the lowest note up an octave (repeatably — the new lowest rolls next); inv < 0
-// moves the highest note down. Applied on top of the derived voicing, per chord,
-// so a nudge stays local and doesn't re-shuffle the rest of the chain.
-function applyInversion(notes, inv) {
-  if (!inv) return notes;
-  const out = [...notes];
-  for (let k = 0; k < Math.abs(inv); k++) {
-    let idx = 0;
-    for (let j = 1; j < out.length; j++) {
-      if (inv > 0 ? out[j] < out[idx] : out[j] > out[idx]) idx = j;
-    }
-    out[idx] += inv > 0 ? 12 : -12;
-  }
-  return out;
-}
-
-// realise a whole progression as midi-note arrays, chaining voice leading, then
-// applying each chord's stored inversion shift (voicing stays derived from prog)
-function computeVoicings(prog, voiceLead) {
-  let base;
-  if (!voiceLead) {
-    base = prog.map(rootPositionMidi);
-  } else {
-    base = [];
-    let prev = null;
-    for (const c of prog) {
-      const v = voiceLeadMidi(prev, c);
-      base.push(v);
-      prev = v;
-    }
-  }
-  return base.map((v, i) => applyInversion(v, prog[i].inv || 0));
-}
-
-const midiToNotes = (midi) => midi.map((m) => Tone.Frequency(m, "midi").toNote());
-
-// "edit distance" between two realised chords: the combined keyboard travel of
-// their voices, paired by ascending pitch (the same pairing the roll's connectors
-// draw). A triad up two semitones = 3×2 = 6; major → sus4 = 1 (just the 3rd steps).
-// Lower means smoother — the metric for minimal-motion progressions.
-function voicingDistance(a, b) {
-  if (!a || !b) return 0;
-  const x = [...a].sort((p, q) => p - q);
-  const y = [...b].sort((p, q) => p - q);
-  let d = 0;
-  for (let v = 0; v < Math.min(x.length, y.length); v++) d += Math.abs(x[v] - y[v]);
-  return d;
-}
-
-// distance from a realised chord to a candidate option, voiced the way `choose`
-// would voice it — so a chooser card previews the motion picking it would cost
-function optionDistance(prevMidi, opt, voiceLead) {
-  if (!prevMidi) return null;
-  const optMidi = voiceLead ? voiceLeadMidi(prevMidi, opt) : rootPositionMidi(opt);
-  return voicingDistance(prevMidi, optMidi);
-}
-
-// the lowest sounding note's name — for slash-chord display of inversions
-const bassNameOf = (midi, keyRoot) =>
-  midi && midi.length ? nameOf(mod12(Math.min(...midi)), keyRoot) : null;
-
-// --- build the diatonic set + colour chords for a key -------------------
-function buildKey(root, mode) {
-  const scale = STEPS[mode].map((s) => (root + s) % 12);
-
-  const diatonic = scale.map((_, d) => {
-    const idx = [d, d + 2, d + 4];
-    const pcs = idx.map((i) => scale[i % 7]);
-    const r = pcs[0];
-    const intervals = pcs.map((pc) => (((pc - r) % 12) + 12) % 12);
-    const q = classify(intervals);
-    const [func, tension] = FUNC[mode][d];
-    const roman = romanFor(mode, d, q);
-    return {
-      rootPc: r,
-      intervals,
-      quality: q,
-      name: nameOf(r, root) + q.suffix,
-      roman,
-      degree: d + 1,
-      func,
-      tension,
-      group: "in-key",
-      resolvesTo: null,
-    };
-  });
-
-  const colour = [];
-  const mk = (rootPc, ints, roman, func, tension, desc, resolvesTo = null) => {
-    const q = classify(ints);
-    return {
-      rootPc,
-      intervals: ints,
-      quality: q,
-      name: nameOf(rootPc, root) + q.suffix,
-      roman,
-      degree: null,
-      func,
-      tension,
-      group: "colour",
-      resolvesTo,
-      colourDesc: desc,
-    };
-  };
-
-  if (mode === "major") {
-    // secondary dominants of ii, iii, IV, V, vi
-    [1, 2, 3, 4, 5].forEach((d) => {
-      const target = diatonic[d];
-      const secRoot = (target.rootPc + 7) % 12;
-      colour.push(
-        mk(
-          secRoot,
-          [0, 4, 7, 10],
-          "V7/" + target.roman.replace(/7|maj7/g, ""),
-          "secondary",
-          4,
-          `Secondary dominant — briefly makes ${target.name} feel like home. Wants to resolve to ${target.name}.`,
-          target.rootPc
-        )
-      );
-    });
-    // borrowed from the parallel minor
-    colour.push(mk((root + 5) % 12, [0, 3, 7], "iv", "borrowed", 2.5,
-      "Borrowed minor iv — bittersweet; the flattened sixth leans down toward the fifth."));
-    colour.push(mk((root + 10) % 12, [0, 4, 7], "♭VII", "borrowed", 2.5,
-      "Borrowed ♭VII — modal, rock/folk flavour; a whole step below home."));
-    colour.push(mk((root + 8) % 12, [0, 4, 7], "♭VI", "borrowed", 2.5,
-      "Borrowed ♭VI — cinematic lift straight out of the parallel minor."));
-  } else if (mode === "minor") {
-    // harmonic-minor dominant: the real pull back to the minor tonic
-    colour.push(mk((root + 7) % 12, [0, 4, 7], "V", "dominant", 3,
-      "Major dominant (raised leading tone) — the strong pull back to the minor tonic.",
-      root));
-    colour.push(mk((root + 7) % 12, [0, 4, 7, 10], "V7", "dominant", 3.5,
-      "Dominant 7th — that tritone really wants to resolve home to the minor tonic.",
-      root));
-    colour.push(mk((root + 11) % 12, [0, 3, 6], "vii°", "dominant", 3.5,
-      "Leading-tone diminished — tense, resolves up into the tonic.",
-      root));
-    colour.push(mk((root + 5) % 12, [0, 4, 7], "IV", "borrowed", 2.5,
-      "Major IV (Dorian colour) — brightens the minor subdominant."));
-    colour.push(mk((root + 8) % 12, [0, 4, 7, 10], "V7/III", "secondary", 4,
-      `Secondary dominant — sets up the relative major (${nameOf((root + 3) % 12, root)}).`,
-      (root + 3) % 12));
-  } else if (mode === "mixolydian") {
-    // borrow Ionian's leading tone when you want a real cadence instead of the soft v
-    colour.push(mk((root + 7) % 12, [0, 4, 7], "V", "dominant", 3,
-      "Major V (borrowed leading tone) — a stronger pull home than the modal v.",
-      root));
-    colour.push(mk((root + 7) % 12, [0, 4, 7, 10], "V7", "dominant", 3.5,
-      "Dominant 7th — the leading-tone cadence, if you want to leave Mixolydian for a moment.",
-      root));
-    // secondary dominant of the signature ♭VII
-    colour.push(mk((root + 5) % 12, [0, 4, 7, 10], "V7/♭VII", "secondary", 4,
-      `Secondary dominant — sets up the ♭VII (${nameOf((root + 10) % 12, root)}).`,
-      (root + 10) % 12));
-    // parallel-minor ♭VI, the cinematic lift
-    colour.push(mk((root + 8) % 12, [0, 4, 7], "♭VI", "borrowed", 2.5,
-      "Borrowed ♭VI — cinematic lift from the parallel minor."));
-  }
-
-  return { diatonic, colour, root, mode, scale };
-}
-
-// sus2 / sus4 forms of the key's plain major/minor triads. The 3rd is swapped for
-// a 2nd (open) or 4th (leaning), so they're quality-neutral; each one resolves to
-// its own plain triad, which is the classic suspension → resolution gesture.
-function suspensionsFor(key) {
-  const out = [];
-  key.diatonic.forEach((c) => {
-    if (c.quality.triad !== "maj" && c.quality.triad !== "min") return; // skip °/+
-    const baseRoman = ROMAN[c.degree - 1];
-    const triadName = nameOf(c.rootPc, key.root); // the resolution target's name
-    [
-      ["sus2", [0, 2, 7], `Suspended 2nd — open and unresolved; settles onto ${triadName}.`],
-      ["sus4", [0, 5, 7], `Suspended 4th — the 4th leans on the 3rd; resolves down to ${triadName}.`],
-    ].forEach(([kind, ints, desc]) => {
-      const q = classify(ints);
-      out.push({
-        rootPc: c.rootPc,
-        intervals: ints,
-        quality: q,
-        name: nameOf(c.rootPc, key.root) + q.suffix,
-        roman: baseRoman + kind,
-        degree: null,
-        func: c.func,
-        tension: c.tension + 0.5, // a touch more tense than the triad it resolves to
-        group: "colour",
-        resolvesTo: c.rootPc,
-        colourDesc: desc,
-      });
-    });
-  });
-  return out;
-}
-
-// --- root-motion label --------------------------------------------------
-const MOTION = {
-  0: "same root", 1: "up a semitone", 2: "up a whole step", 3: "up a minor third",
-  4: "up a major third", 5: "up a fourth", 6: "a tritone", 7: "up a fifth",
-  8: "down a major third", 9: "down a minor third", 10: "down a whole step",
-  11: "down a semitone",
-};
-const motionLabel = (from, to) => MOTION[(((to - from) % 12) + 12) % 12];
-
-// --- contextual "what this move does" -----------------------------------
-const SPECIAL = {
-  major: {
-    "5>1": "Authentic cadence — the dominant resolves home. The strongest landing.",
-    "7>1": "Leading-tone snap — tension resolves straight to the tonic.",
-    "4>1": "Plagal cadence — the gentle ‘Amen’ home.",
-    "5>6": "Deceptive cadence — you expect home, you get the relative minor.",
-    "2>5": "ii–V — the smoothest possible setup for the dominant.",
-    "4>5": "Subdominant into dominant — winding the spring.",
-    "1>4": "Steps away from home into subdominant space.",
-    "1>5": "Straight to the dominant — poised to return.",
-    "1>2": "Eases into predominant space.",
-    "1>6": "Slips to the relative minor — same family, softer light.",
-    "6>4": "Predominant motion, heading for the dominant.",
-    "6>2": "Predominant motion, heading for the dominant.",
-    "3>6": "Falling fifths — pulled toward the tonic family.",
-  },
-  minor: {
-    "5>1": "Dominant resolves to the minor tonic (strongest with the raised leading tone).",
-    "7>3": "Subtonic falls to the relative major — a bright exit.",
-    "1>4": "Into the brooding minor subdominant.",
-    "4>5": "Building toward the dominant.",
-    "1>6": "Lifts to the submediant — a shaft of major light.",
-    "1>7": "Down a step to the subtonic — modal, folk/rock colour.",
-  },
-  mixolydian: {
-    "7>1": "♭VII → I — the signature Mixolydian cadence; a whole-step drop home.",
-    "1>7": "Down to ♭VII — leans into that flat-seventh colour.",
-    "4>1": "Plagal — the gentle ‘Amen’ home.",
-    "5>1": "Soft modal cadence — minor v eases home, no leading tone.",
-    "1>4": "Opens into the bright subdominant.",
-    "1>5": "To the modal v — mellower than a major dominant.",
-    "4>7": "IV to ♭VII — the classic two-chord Mixolydian vamp.",
-  },
-};
-const ROLE = {
-  major: {
-    1: "Home — the tonic, point of rest.",
-    2: "Predominant — sets up the dominant.",
-    3: "Mediant colour — wistful; shares tones with I and V.",
-    4: "Subdominant — opens the harmony up.",
-    5: "The dominant — pulls hard toward home.",
-    6: "Relative minor — a softer resting point.",
-    7: "Leading-tone chord — tense, wants to resolve up.",
-  },
-  minor: {
-    1: "Home — the minor tonic.",
-    2: "Predominant (ii°) — leans toward the dominant.",
-    3: "Relative major — a brighter resting point.",
-    4: "Minor subdominant — brooding predominant.",
-    5: "Weak dominant (v). For a real pull, reach for the major V in Colour.",
-    6: "Submediant — lush, borrowed-from-major brightness.",
-    7: "Subtonic — the modal step below; folk/rock, or a route to III.",
-  },
-  mixolydian: {
-    1: "Home — the Mixolydian tonic (major, but with a ♭7 in the air).",
-    2: "Supertonic minor — a gentle predominant.",
-    3: "Diminished mediant — tense, best as a passing chord.",
-    4: "Subdominant — bright, opens the harmony up.",
-    5: "Minor v — the soft modal dominant, no leading tone.",
-    6: "Submediant minor — a mellow resting point.",
-    7: "♭VII — the signature Mixolydian chord, a whole step below home.",
-  },
-};
-
-function moveDescription(mode, fromDeg, to) {
-  if (to.group === "colour") return to.colourDesc;
-  const roleTxt = ROLE[mode][to.degree];
-  if (fromDeg == null) return roleTxt;
-  const s = SPECIAL[mode][`${fromDeg}>${to.degree}`];
-  return s || roleTxt;
-}
-
-// ordering: how idiomatic is from-function -> to-function
-function score(fromFunc, to) {
-  const f = fromFunc, g = to.func;
-  const m = {
-    tonic: { predominant: 3, dominant: 3, tonic: 1, borrowed: 2, secondary: 2, subtonic: 2 },
-    predominant: { dominant: 3, tonic: 1, predominant: 1, borrowed: 1, secondary: 2, subtonic: 1 },
-    dominant: { tonic: 3, borrowed: 1, predominant: 1, secondary: 1, dominant: 0, subtonic: 1 },
-    subtonic: { tonic: 2, predominant: 2, dominant: 2, secondary: 1, borrowed: 1 },
-    secondary: { tonic: 2, dominant: 2, predominant: 2, borrowed: 1, secondary: 1, subtonic: 1 },
-    borrowed: { tonic: 2, dominant: 2, predominant: 2, borrowed: 1, secondary: 1, subtonic: 1 },
-  };
-  return (m[f] && m[f][g]) || 1;
-}
-
-// how "reach-for-it obvious" a destination is, breaking ties within a function
-const SAL_MAJOR = { 1: 0.95, 2: 0.7, 3: 0.4, 4: 0.9, 5: 1.0, 6: 0.6, 7: 0.45 };
-const SAL_MINOR = { 1: 0.9, 2: 0.6, 3: 0.55, 4: 0.85, 5: 0.5, 6: 0.65, 7: 0.75 };
-function salience(mode, chord) {
-  if (chord.group === "colour")
-    return chord.func === "dominant" ? 0.9 : chord.func === "secondary" ? 0.5 : 0.4;
-  return (mode === "minor" ? SAL_MINOR : SAL_MAJOR)[chord.degree] || 0.5;
-}
-
-// build the option list from the current chord
-function optionsFrom(current, key) {
-  const fromFunc = current ? current.func : null;
-  const fromDeg = current ? current.degree : null;
-
-  const decorate = (c) => ({
-    ...c,
-    move: moveDescription(key.mode, fromDeg, c),
-    motion: current ? motionLabel(current.rootPc, c.rootPc) : null,
-    resolution:
-      current && current.resolvesTo != null && current.resolvesTo === c.rootPc,
-  });
-
-  const rank = (c) =>
-    score(fromFunc, c) * 10 + salience(key.mode, c) + (c.resolution ? 100 : 0);
-
-  let inKey = key.diatonic.map(decorate);
-  if (current) {
-    inKey = inKey.map((c) =>
-      c.resolution
-        ? { ...c, move: `Resolution — lands home on ${c.name}, releasing the previous chord’s tension.` }
-        : c
-    );
-    inKey.sort((a, b) => rank(b) - rank(a) || a.degree - b.degree);
-  } else {
-    inKey.sort((a, b) => a.degree - b.degree);
-  }
-  const colour = key.colour.map(decorate);
-  const sus = (key.suspensions || []).map(decorate);
-  return { inKey, colour, sus };
-}
 
 // ------------------------------------------------------------------------
 //  AUDIO
@@ -514,27 +70,26 @@ const HUE_LABEL = {
   outside: "Outside",
 };
 
-// buildKey, restacked with sevenths when add7 is on — pure, so URL decode can
-// rebuild the exact chord pool a saved progression was chosen from.
-function resolveKey(root, mode, add7) {
-  const base = buildKey(root, mode);
-  if (!add7) return base;
-  const scale = base.scale;
-  const diatonic = scale.map((_, d) => {
-    const idx = [d, d + 2, d + 4, d + 6];
-    const pcs = idx.map((i) => scale[i % 7]);
-    const r = pcs[0];
-    const intervals = pcs.map((pc) => (((pc - r) % 12) + 12) % 12);
-    const q = classify(intervals);
-    const [func, tension] = FUNC[mode][d];
-    const roman = romanFor(mode, d, q);
-    return {
-      rootPc: r, intervals, quality: q, name: nameOf(r, root) + q.suffix,
-      roman, degree: d + 1, func, tension, group: "in-key", resolvesTo: null,
-    };
-  });
-  return { ...base, diatonic };
-}
+// choreography timings — the futures clear out, then the new column assembles
+const EXIT_MS = 170;
+const SPAWN_MS = 340;
+
+// stable identity for an option row (roman alone collides: minor has V and V7)
+const optKey = (o) => `${o.roman}:${o.rootPc}:${o.intervals.join("-")}`;
+
+// --- filtering the futures ---
+// Fold the display spellings down to what someone would actually type: "bvii"
+// finds ♭VII, "bdim" finds B°, "f#" finds F♯. Matching runs over the chord name
+// and the roman, which is how you'd name the chord you're hunting for.
+const normQuery = (s) =>
+  s
+    .toLowerCase()
+    .replace(/[♭b]/g, "b")
+    .replace(/[♯#]/g, "#")
+    .replace(/°/g, "dim")
+    .replace(/\s+/g, "");
+const matchesQuery = (o, q) =>
+  normQuery(o.name).includes(q) || normQuery(o.roman).includes(q);
 
 // --- shareable state via querystring ---
 // A chord is identified by root + intervals; the reader rebuilds the key's chord
@@ -596,8 +151,7 @@ function decodeState(search) {
       if (!match) break; // unknown chord — stop rather than guess
       // decorate like optionsFrom so a reconstituted chord matches a chosen one
       const prev = prog.length ? prog[prog.length - 1] : null;
-      const resolution =
-        !!prev && prev.resolvesTo != null && prev.resolvesTo === match.rootPc;
+      const resolution = isResolution(prev, match);
       prog.push({
         ...match,
         id: prog.length + 1,
@@ -624,8 +178,22 @@ export default function ChordExplorer() {
   const [tempo, setTempo] = useState(boot.tempo ?? 96);
   const [prog, setProg] = useState(boot.prog ?? []);
   const [playingIdx, setPlayingIdx] = useState(-1);
+  const [query, setQuery] = useState("");
   const ensure = useSynth();
   const uid = useRef(boot.prog?.length ?? 0);
+
+  // choosing is a short piece of choreography: the futures fade, the chosen one
+  // flies left into the roll and bursts into note pills, then the next futures
+  // assemble. `exiting` names the chord mid-flight; `spawn` tells the roll which
+  // column just landed and where its pills should fly in from.
+  const [exiting, setExiting] = useState(null);
+  const [spawn, setSpawn] = useState(null);
+  const colsRef = useRef(null);
+  const rollRef = useRef(null);
+  const futuresRef = useRef(null);
+  const flight = useRef(null); // the chosen row's position, relative to the list
+  const timers = useRef([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
   // when add7 is on, restack diatonic chords with sevenths; always carry the
   // suspension palette (shown only when the Sus toggle is on)
@@ -643,6 +211,43 @@ export default function ChordExplorer() {
 
   const current = prog.length ? prog[prog.length - 1] : null;
   const { inKey, colour, sus } = useMemo(() => optionsFrom(current, key), [current, key]);
+
+  // every possible next chord as one flat list, most tense at the top. Sort is
+  // stable, so within a tension band the engine's own ranking still shows through.
+  const futures = useMemo(
+    () =>
+      [...inKey, ...colour, ...(susOn ? sus : [])].sort((a, b) => b.tension - a.tension),
+    [inKey, colour, sus, susOn]
+  );
+
+  // the futures list is the whole vocabulary now, so it needs a way in
+  const q = normQuery(query.trim());
+  const shown = useMemo(
+    () => (q ? futures.filter((o) => matchesQuery(o, q)) : futures),
+    [futures, q]
+  );
+
+  // chords a toggle is currently hiding. Without this a search for "Fsus4" with
+  // Sus off just fails, and the reason is a control on the other side of the page.
+  const hiddenBy = useMemo(() => {
+    if (!q) return [];
+    const groups = [];
+    if (!susOn) groups.push({ label: "Sus", turnOn: () => setSusOn(true), opts: sus });
+    if (!add7) {
+      // 7ths restacks the diatonic chords rather than adding to them — the extras
+      // are the ones whose name isn't already on offer as a triad
+      const here = new Set(futures.map((o) => o.name));
+      const alt = optionsFrom(current, resolveKey(root, mode, true)).inKey;
+      groups.push({
+        label: "7ths",
+        turnOn: () => setAdd7(true),
+        opts: alt.filter((o) => !here.has(o.name)),
+      });
+    }
+    return groups
+      .map((g) => ({ ...g, hits: g.opts.filter((o) => matchesQuery(o, q)) }))
+      .filter((g) => g.hits.length);
+  }, [q, futures, sus, susOn, add7, root, mode, current]);
 
   // midi voicings for the whole progression, chained when voice-leading is on
   const voicings = useMemo(() => computeVoicings(prog, voiceLead), [prog, voiceLead]);
@@ -686,16 +291,64 @@ export default function ChordExplorer() {
   );
 
   const choose = useCallback(
-    async (opt) => {
+    async (opt, rowEl) => {
+      if (exiting) return; // one flight at a time
       // realise the new chord from the current chain end so it matches the recompute
       const prevMidi = voiceLead && voicings.length ? voicings[voicings.length - 1] : null;
       const midi = voiceLead ? voiceLeadMidi(prevMidi, opt) : rootPositionMidi(opt);
-      const chord = { ...opt, id: ++uid.current };
-      setProg((p) => [...p, chord]);
-      await playVoiced(midi);
+      const idx = prog.length;
+      // remember where the row sat *within the list* — adding a column reflows the
+      // stage, so an absolute rect taken now would be stale by the time it lands
+      const list = futuresRef.current;
+      if (rowEl && list) {
+        const r = rowEl.getBoundingClientRect();
+        const f = list.getBoundingClientRect();
+        flight.current = { x: r.left - f.left + 12, y: r.top + r.height / 2 - f.top };
+      } else {
+        flight.current = null;
+      }
+      setExiting(optKey(opt));
+      playVoiced(midi); // sound lands on the click, not after the animation
+      timers.current.push(
+        setTimeout(() => {
+          setProg((p) => [...p, { ...opt, id: ++uid.current }]);
+          // clear the search only once the chord lands — clearing on click would
+          // repopulate the list mid-exit and undo the fade
+          setQuery("");
+          setSpawn({ idx });
+          setExiting(null);
+        }, EXIT_MS)
+      );
+      timers.current.push(setTimeout(() => setSpawn(null), EXIT_MS + SPAWN_MS + 400));
     },
-    [voiceLead, voicings, playVoiced]
+    [exiting, voiceLead, voicings, playVoiced, prog.length]
   );
+
+  // keep the newest column parked against the futures list as the roll grows
+  useEffect(() => {
+    const el = rollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [prog.length]);
+
+  // FLIP: once the new column is laid out, measure each pill's landing spot and
+  // hand it the vector back to the row it came from. The CSS keyframe plays it
+  // in reverse, so the pills look like they were flung out of the chosen future.
+  useLayoutEffect(() => {
+    if (!spawn) return;
+    const roll = rollRef.current;
+    if (roll) roll.scrollLeft = roll.scrollWidth; // park before measuring
+    const col = colsRef.current?.children[spawn.idx];
+    const list = futuresRef.current;
+    if (!col || !list || !flight.current) return;
+    const f = list.getBoundingClientRect();
+    const ox = f.left + flight.current.x;
+    const oy = f.top + flight.current.y;
+    col.querySelectorAll(".ce-roll-note").forEach((pill) => {
+      const r = pill.getBoundingClientRect();
+      pill.style.setProperty("--dx", `${ox - (r.left + r.width / 2)}px`);
+      pill.style.setProperty("--dy", `${oy - (r.top + r.height / 2)}px`);
+    });
+  }, [spawn]);
 
   const playAll = useCallback(async () => {
     if (!prog.length) return;
@@ -726,7 +379,7 @@ export default function ChordExplorer() {
     },
     [voicings, playVoiced]
   );
-  const changeKey = (r, m) => { setRoot(r); setMode(m); setProg([]); };
+  const changeKey = (r, m) => { setRoot(r); setMode(m); setProg([]); setQuery(""); };
 
   const [copied, setCopied] = useState(false);
   const share = useCallback(async () => {
@@ -862,78 +515,44 @@ export default function ChordExplorer() {
           </div>
         </div>
 
-        {prog.length ? (
-          <>
-            <PianoRoll
-              prog={prog}
-              voicings={voicings}
-              playingIdx={playingIdx}
-              keyRoot={key.root}
-              onPlay={(i) => playVoiced(voicings[i])}
-              onPlayNote={(m) => playVoiced([m])}
-              onInvert={invert}
-            />
-          </>
-        ) : (
-          <p className="ce-empty">
-            Choose any chord below to begin. It plays, then shows you the moves
-            that follow — and what each one does.
-          </p>
-        )}
-      </section>
-
-      {/* current chord + legend */}
-      {current && (
-        <section className="ce-now">
-          <div
-            className="ce-now-badge"
-            style={{ "--c": HUE[hueOf(current.func)] }}
-          >
-            <span className="ce-now-roman">{current.roman}</span>
-            <span className="ce-now-name">{current.name}</span>
-            <span className="ce-now-notes">{chordNoteNames(current, key.root).join(" ")}</span>
-            <span className="ce-now-func">{current.func}</span>
+        <div className="ce-stage">
+          <div className="ce-roll" ref={rollRef}>
+            {prog.length ? (
+              <PianoRoll
+                prog={prog}
+                voicings={voicings}
+                playingIdx={playingIdx}
+                keyRoot={key.root}
+                spawn={spawn}
+                colsRef={colsRef}
+                onPlay={(i) => playVoiced(voicings[i])}
+                onPlayNote={(m) => playVoiced([m])}
+                onInvert={invert}
+              />
+            ) : (
+              <p className="ce-empty">
+                Pick a chord from the futures — it plays, and the roll starts here.
+              </p>
+            )}
           </div>
-          <p className="ce-now-cue">Where to next?</p>
-        </section>
-      )}
 
-      {/* options */}
-      <section className="ce-options">
-        <div className="ce-group-head">
-          <span className="ce-eyebrow">
-            {current ? "In key" : "Start on any chord"}
-          </span>
+          <FutureList
+            listRef={futuresRef}
+            options={shown}
+            total={futures.length}
+            current={current}
+            keyRoot={key.root}
+            fromMidi={fromMidi}
+            voiceLead={voiceLead}
+            exiting={exiting}
+            listKey={`${prog.length}|${root}|${mode}|${add7}|${susOn}|${voiceLead}`}
+            query={query}
+            onQuery={setQuery}
+            hiddenBy={hiddenBy}
+            onPick={choose}
+            onPreview={preview}
+          />
         </div>
-        <div className="ce-grid">
-          {inKey.map((o) => (
-            <ChordCard key={o.roman + o.rootPc} opt={o} onPick={choose} onPreview={preview} keyRoot={key.root} dist={optionDistance(fromMidi, o, voiceLead)} />
-          ))}
-        </div>
-
-        <div className="ce-group-head ce-colour-head">
-          <span className="ce-eyebrow">Colour — borrowed &amp; secondary</span>
-          <span className="ce-hint">outside the key, for tension and surprise</span>
-        </div>
-        <div className="ce-grid">
-          {colour.map((o) => (
-            <ChordCard key={o.roman + o.rootPc} opt={o} onPick={choose} onPreview={preview} keyRoot={key.root} dist={optionDistance(fromMidi, o, voiceLead)} />
-          ))}
-        </div>
-
-        {susOn && (
-          <>
-            <div className="ce-group-head ce-colour-head">
-              <span className="ce-eyebrow">Suspensions — sus2 &amp; sus4</span>
-              <span className="ce-hint">the 3rd steps aside; each one resolves to its triad</span>
-            </div>
-            <div className="ce-grid">
-              {sus.map((o) => (
-                <ChordCard key={o.roman + o.rootPc} opt={o} onPick={choose} onPreview={preview} keyRoot={key.root} dist={optionDistance(fromMidi, o, voiceLead)} />
-              ))}
-            </div>
-          </>
-        )}
       </section>
 
       <footer className="ce-legend">
@@ -949,31 +568,113 @@ export default function ChordExplorer() {
   );
 }
 
-function ChordCard({ opt, onPick, onPreview, keyRoot, dist }) {
-  const hue = hueOf(opt.func);
+// ------------------------------------------------------------------------
+//  FUTURES — every chord that could come next, one line each, most tense first
+// ------------------------------------------------------------------------
+const MAX_TENSION = 4.5; // the top of the tension meter, matching the engine's range
+
+function FutureList({
+  options, total, current, keyRoot, fromMidi, voiceLead, exiting, listKey, listRef,
+  query, onQuery, hiddenBy, onPick, onPreview,
+}) {
+  const filtering = query.trim() !== "";
+  // Enter commits the top match, so "fsus4 ⏎" plays the chord you came for. The
+  // row element is what the flight animation measures from, hence the lookup.
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") { onQuery(""); e.currentTarget.blur(); }
+    if (e.key === "Enter" && options.length) {
+      onPick(options[0], listRef.current?.querySelector(".ce-future"));
+    }
+  };
   return (
-    <button
-      className={"ce-card" + (opt.resolution ? " resolve" : "")}
-      style={{ "--c": HUE[hue] }}
-      onClick={() => onPick(opt)}
-    >
-      <div className="ce-card-top">
-        <span className="ce-card-name" onMouseEnter={() => onPreview(opt)}>{opt.name}</span>
-        <span className="ce-card-tr">
-          <span className="ce-card-roman">{opt.roman}</span>
-          {dist != null && (
-            <span
-              className={"ce-chip-dist" + (dist <= 2 ? " smooth" : dist >= 7 ? " far" : "")}
-              title={`${dist} semitone${dist === 1 ? "" : "s"} of voice movement from the current chord`}
-            >
-              Δ{dist}
-            </span>
-          )}
+    <div className="ce-futures">
+      <div className="ce-futures-head">
+        <span className="ce-eyebrow">
+          {current ? `Where to next from ${current.name}?` : "Start on any chord"}
+        </span>
+        <span className="ce-futures-tools">
+          <input
+            className="ce-filter"
+            type="search"
+            value={query}
+            placeholder="Filter…"
+            aria-label="Filter the chords by name or roman numeral"
+            title="Filter by name or roman numeral — “sus”, “♭VII”, “F♯”. Enter picks the top match."
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+          />
+          <span
+            className="ce-futures-axis"
+            title={filtering ? undefined : "Rows are ordered by how much tension the chord carries"}
+          >
+            {filtering ? `${options.length} of ${total}` : "tension ↓"}
+          </span>
         </span>
       </div>
-      <span className="ce-card-notes">{chordNoteNames(opt, keyRoot).join(" ")}</span>
-      {opt.motion && <span className="ce-card-motion">root {opt.motion}</span>}
-      <span className="ce-card-move">{opt.move}</span>
+      {/* keyed on the whole option set so the assemble animation replays */}
+      <div className="ce-futures-list" key={listKey} ref={listRef}>
+        {options.map((o, i) => (
+          <FutureRow
+            key={optKey(o)}
+            i={i}
+            opt={o}
+            keyRoot={keyRoot}
+            dist={optionDistance(fromMidi, o, voiceLead)}
+            state={exiting ? (exiting === optKey(o) ? "chosen" : "leaving") : ""}
+            onPick={onPick}
+            onPreview={onPreview}
+          />
+        ))}
+      </div>
+      {filtering && (!options.length || hiddenBy.length > 0) && (
+        <p className="ce-futures-note" role="status">
+          {!options.length && (
+            <span>Nothing here matches “{query.trim()}”.</span>
+          )}
+          {hiddenBy.map((g) => (
+            <button key={g.label} type="button" className="ce-futures-hint" onClick={g.turnOn}>
+              +{g.hits.length} more with {g.label} on
+            </button>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FutureRow({ opt, i, keyRoot, dist, state, onPick, onPreview }) {
+  const ref = useRef(null);
+  const notes = chordNoteNames(opt, keyRoot).join(" ");
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={
+        "ce-future" + (opt.resolution ? " resolve" : "") + (state ? " " + state : "")
+      }
+      style={{ "--c": HUE[hueOf(opt.func)], "--i": i, "--t": opt.tension / MAX_TENSION }}
+      onMouseEnter={() => onPreview(opt)}
+      onClick={() => onPick(opt, ref.current)}
+      title={
+        `${opt.name} — ${notes}` +
+        (opt.motion ? ` · root ${opt.motion}` : "") +
+        `\n${opt.move}`
+      }
+    >
+      <span className="ce-fu-tension" aria-hidden="true"><i /></span>
+      <span className="ce-fu-name">{opt.name}</span>
+      <span className="ce-fu-roman">{opt.roman}</span>
+      <span className="ce-fu-dist">
+        {dist != null && (
+          <span
+            className={"ce-chip-dist" + (dist <= 2 ? " smooth" : dist >= 7 ? " far" : "")}
+            title={`${dist} semitone${dist === 1 ? "" : "s"} of voice movement from the current chord`}
+          >
+            Δ{dist}
+          </span>
+        )}
+      </span>
+      <span className="ce-fu-move">{opt.move}</span>
     </button>
   );
 }
@@ -982,6 +683,13 @@ function ChordCard({ opt, onPick, onPreview, keyRoot, dist }) {
 // line up across columns and the voice leading is visible. Faint connectors trace
 // each voice from one chord to the next; the chord tile sits underneath.
 const ROLL = { ROW: 11, CELL: 18, COL: 84, GAP: 10 }; // px per semitone, pill, column, gap
+
+// semitone step as a sequencer would read it: +2, -3, 0 for a held voice
+const signed = (n) => (n > 0 ? `+${n}` : `${n}`);
+const stepTitle = (n) =>
+  n === 0
+    ? "this voice holds"
+    : `this voice moves ${signed(n)} semitone${Math.abs(n) === 1 ? "" : "s"}`;
 
 const Chevron = ({ up }) => (
   <svg viewBox="0 0 12 8" width="11" height="7" aria-hidden="true" focusable="false">
@@ -996,7 +704,7 @@ const Chevron = ({ up }) => (
   </svg>
 );
 
-function PianoRoll({ prog, voicings, playingIdx, keyRoot, onPlay, onPlayNote, onInvert }) {
+function PianoRoll({ prog, voicings, playingIdx, keyRoot, spawn, colsRef, onPlay, onPlayNote, onInvert }) {
   const { ROW, CELL, COL, GAP } = ROLL;
   const all = voicings.flat();
   if (!all.length) return null;
@@ -1021,7 +729,7 @@ function PianoRoll({ prog, voicings, playingIdx, keyRoot, onPlay, onPlayNote, on
   }
 
   return (
-    <div className="ce-roll">
+    <div className="ce-roll-scroll">
       <div className="ce-roll-inner" style={{ width }}>
         <svg className="ce-roll-links" width={width} height={bandH} aria-hidden="true">
           {links.map((l, k) => (
@@ -1032,9 +740,11 @@ function PianoRoll({ prog, voicings, playingIdx, keyRoot, onPlay, onPlayNote, on
             />
           ))}
         </svg>
-        <div className="ce-roll-cols">
+        <div className="ce-roll-cols" ref={colsRef}>
           {prog.map((c, i) => {
             const midi = voicings[i];
+            // the column that just landed: its pills fly in from the future row
+            const born = spawn && spawn.idx === i;
             const prevSet = i > 0 ? new Set(voicings[i - 1]) : null;
             const rootName = nameOf(c.rootPc, keyRoot);
             const bass = bassNameOf(midi, keyRoot);
@@ -1042,6 +752,8 @@ function PianoRoll({ prog, voicings, playingIdx, keyRoot, onPlay, onPlayNote, on
             const notes = chordNoteNames(c, keyRoot);
             // semitone travel from the previous chord (the connectors' total length)
             const dist = i > 0 ? voicingDistance(voicings[i - 1], midi) : null;
+            // per-voice steps, for dialling the move into a chromatic sequencer
+            const steps = i > 0 ? voiceSteps(voicings[i - 1], midi) : null;
             return (
               <div
                 key={c.id}
@@ -1049,20 +761,35 @@ function PianoRoll({ prog, voicings, playingIdx, keyRoot, onPlay, onPlayNote, on
                 style={{ "--c": HUE[hueOf(c.func)], width: COL }}
               >
                 <span className="ce-roll-notes" style={{ height: bandH }}>
-                  {midi.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      className={"ce-roll-note" + (prevSet && prevSet.has(m) ? " held" : "")}
-                      style={{ top: topOf(m) }}
-                      onClick={() => onPlayNote(m)}
-                      title={`Play ${Tone.Frequency(m, "midi").toNote()}`}
-                    >
-                      {nameOf(mod12(m), keyRoot)}
-                    </button>
-                  ))}
+                  {[...midi].sort((a, b) => a - b).map((m, v) => {
+                    const step = steps ? steps.get(m) : undefined;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        className={
+                          "ce-roll-note" +
+                          (prevSet && prevSet.has(m) ? " held" : "") +
+                          (born ? " spawn" : "")
+                        }
+                        // --dx / --dy are measured after layout, in the parent
+                        style={{
+                          top: topOf(m),
+                          ...(born ? { animationDelay: `${v * 52}ms` } : null),
+                        }}
+                        onClick={() => onPlayNote(m)}
+                        title={
+                          `Play ${Tone.Frequency(m, "midi").toNote()}` +
+                          (step == null ? "" : ` · ${stepTitle(step)}`)
+                        }
+                      >
+                        {nameOf(mod12(m), keyRoot)}
+                        {step != null && <span className="ce-roll-step">{signed(step)}</span>}
+                      </button>
+                    );
+                  })}
                 </span>
-                <div className="ce-roll-tilewrap">
+                <div className={"ce-roll-tilewrap" + (born ? " spawn" : "")}>
                   <button
                     type="button"
                     className="ce-roll-tile"
@@ -1147,7 +874,7 @@ const CSS = `
   --disp:'Space Grotesk',system-ui,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
   background:var(--bg); color:var(--ink); font-family:var(--disp);
-  padding:20px; border-radius:16px; max-width:1000px; margin:0 auto;
+  padding:20px; border-radius:16px; max-width:1180px; margin:0 auto;
   -webkit-font-smoothing:antialiased;
 }
 .ce-root *{box-sizing:border-box;}
@@ -1201,8 +928,11 @@ const CSS = `
 .ce-curve-base{stroke:var(--line); stroke-width:.5; stroke-dasharray:1.5 1.5;}
 .ce-curve-line{fill:none; stroke:var(--ink); stroke-width:1; opacity:.55; vector-effect:non-scaling-stroke;}
 
-/* piano-roll progression */
-.ce-roll{overflow-x:auto; padding:2px 0 4px;}
+/* stage: the roll on the left, the futures fanning out on the right */
+/* the roll takes only the width its chords need, so a short progression leaves
+   the futures room to breathe; past that it shrinks and scrolls internally */
+.ce-stage{display:flex; align-items:flex-start; gap:18px;}
+.ce-roll{flex:0 1 auto; min-width:0; overflow-x:auto; padding:2px 0 4px;}
 .ce-roll-inner{position:relative;}
 .ce-roll-links{position:absolute; top:0; left:0; z-index:0; overflow:visible; pointer-events:none;}
 .ce-roll-link{stroke:var(--ink); stroke-width:1; opacity:.13;}
@@ -1216,8 +946,24 @@ const CSS = `
   font-family:var(--mono); font-size:11px; font-weight:500; color:var(--ink); letter-spacing:.02em;
   background:color-mix(in srgb, var(--c) 14%, var(--panel));
   border:1px solid color-mix(in srgb, var(--c) 45%, transparent); border-radius:5px;
-  transition:background .1s ease, transform .1s ease;
+  /* top is inline-styled from the pitch band; easing it means the whole roll
+     glides when a new chord widens the band instead of jumping */
+  transition:background .1s ease, transform .1s ease, top .3s cubic-bezier(.3,.8,.35,1);
 }
+/* a freshly chosen chord: its pills fly in from the future row that spawned them */
+@keyframes ce-spawn{
+  from{transform:translate(var(--dx), var(--dy)) scale(.5); opacity:0;}
+  55%{opacity:1;}
+  to{transform:none; opacity:1;}
+}
+.ce-roll-note.spawn{animation:ce-spawn .34s cubic-bezier(.2,.85,.3,1) backwards; transition:none;}
+@keyframes ce-settle{from{opacity:0; transform:translateY(-5px);} to{opacity:1; transform:none;}}
+.ce-roll-tilewrap.spawn{animation:ce-settle .26s ease .19s backwards;}
+.ce-roll-step{
+  position:absolute; right:3px; /* absolute, so the note name stays optically centred */
+  font-size:9px; font-weight:400; color:var(--muted); letter-spacing:0;
+}
+.ce-roll-note:hover .ce-roll-step, .ce-roll-col.playing .ce-roll-step{color:var(--ink);}
 .ce-roll-note.held{
   background:color-mix(in srgb, var(--c) 30%, var(--panel));
   border-color:var(--c);
@@ -1263,55 +1009,100 @@ const CSS = `
 .ce-inv-btn:active{transform:scale(.9);}
 .ce-inv-btn:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
 
-.ce-now{display:flex; align-items:center; gap:16px; margin:22px 2px 8px;}
-.ce-now-badge{
-  --c:var(--home); display:inline-flex; align-items:baseline; gap:12px;
-  padding:12px 18px; border-radius:12px; background:var(--panel);
-  border:1px solid var(--line); box-shadow:inset 4px 0 0 var(--c);
+/* futures: every chord that could come next, one line each, most tense on top */
+.ce-futures{flex:1 1 auto; min-width:min(430px, 100%); display:flex; flex-direction:column; gap:7px;}
+.ce-futures-head{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+.ce-futures-tools{display:flex; align-items:center; gap:9px; flex:0 0 auto;}
+.ce-futures-axis{
+  font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.06em;
+  min-width:6.2em; text-align:right; /* holds width as the count swaps in */
 }
-.ce-now-roman{font-family:var(--mono); font-size:14px; color:var(--c); font-weight:500;}
-.ce-now-name{font-size:34px; font-weight:700; letter-spacing:-.03em; line-height:1;}
-.ce-now-notes{font-family:var(--mono); font-size:11px; letter-spacing:.08em; color:var(--muted);}
-.ce-now-func{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted);}
-.ce-now-cue{font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.04em;}
-
-.ce-options{margin-top:8px;}
-.ce-group-head{display:flex; align-items:baseline; gap:10px; margin:16px 2px 10px;}
-.ce-colour-head{margin-top:26px;}
-.ce-hint{font-size:11px; color:var(--muted); font-style:italic;}
-
-.ce-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(158px,1fr)); gap:9px;}
-.ce-card{
-  --c:var(--home); text-align:left; display:flex; flex-direction:column; gap:5px;
-  padding:12px 13px 13px; border-radius:11px; background:var(--panel);
-  border:1px solid var(--line); border-left:3px solid var(--c); cursor:pointer;
-  transition:transform .11s ease, box-shadow .11s ease, background .11s ease;
+.ce-filter{
+  width:120px; font-family:var(--mono); font-size:11px; color:var(--ink);
+  padding:4px 8px; border:1px solid var(--line); border-radius:7px; background:var(--bg);
+  transition:border-color .12s ease, background .12s ease;
 }
-.ce-card:hover{transform:translateY(-2px); box-shadow:0 6px 16px -10px rgba(34,30,24,.5); background:#fff;}
-.ce-card:active{transform:translateY(0);}
-.ce-card:focus-visible{outline:2px solid var(--ink); outline-offset:2px;}
-.ce-card.resolve{background:#fff; border-color:var(--c); box-shadow:0 0 0 1px var(--c) inset;}
-.ce-card-top{display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
-.ce-card-tr{display:flex; flex-direction:column; align-items:flex-end; gap:3px; flex:0 0 auto;}
-.ce-card-name{font-size:20px; font-weight:700; letter-spacing:-.02em; border-radius:5px; padding:0 4px; margin:0 -4px; cursor:pointer; transition:background .12s, color .12s;}
-.ce-card-name:hover{background:color-mix(in srgb, var(--c) 16%, transparent); color:var(--c);}
-.ce-card-roman{font-family:var(--mono); font-size:11px; color:var(--c); font-weight:500;}
-.ce-card-notes{font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--muted);}
-.ce-card-motion{font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.02em;}
-.ce-card-move{font-size:12px; line-height:1.4; color:var(--ink);}
+.ce-filter::placeholder{color:var(--muted); opacity:.85;}
+.ce-filter:focus{outline:none; border-color:var(--ink); background:var(--panel);}
+.ce-filter::-webkit-search-cancel-button{cursor:pointer;}
+
+.ce-futures-note{
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+  margin:4px 0 0; padding:0 4px; font-size:11.5px; color:var(--muted);
+}
+.ce-futures-hint{
+  font-family:var(--mono); font-size:10.5px; color:var(--ink); cursor:pointer;
+  padding:3px 8px; border-radius:6px; border:1px dashed var(--line);
+  background:transparent; transition:background .1s ease, border-color .1s ease;
+}
+.ce-futures-hint:hover{background:var(--bg); border-color:var(--ink); border-style:solid;}
+.ce-futures-hint:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
+.ce-futures-list{display:flex; flex-direction:column; gap:2px;}
+
+.ce-future{
+  --c:var(--home); --t:0;
+  display:grid; grid-template-columns:14px 5.4em 4.4em 2.9em minmax(0,1fr);
+  align-items:center; gap:8px; width:100%; text-align:left;
+  padding:3px 8px 3px 4px; border:1px solid transparent; border-radius:7px;
+  background:transparent; color:var(--ink); cursor:pointer;
+  transition:background .1s ease, border-color .1s ease, transform .1s ease;
+}
+.ce-future:hover{background:var(--bg); border-color:var(--line2); transform:translateX(2px);}
+.ce-future:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
+.ce-future.resolve{background:color-mix(in srgb, var(--c) 9%, transparent); border-color:color-mix(in srgb, var(--c) 35%, transparent);}
+
+/* the tension meter doubles as the function swatch — height reads as tension */
+.ce-fu-tension{display:flex; align-items:center; justify-content:center; height:16px;}
+.ce-fu-tension i{
+  display:block; width:5px; border-radius:3px; background:var(--c);
+  height:calc(4px + var(--t) * 12px);
+}
+.ce-fu-name{font-size:14.5px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-roman{font-family:var(--mono); font-size:10.5px; color:var(--c); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-dist{display:flex; justify-content:flex-end;}
+.ce-fu-dist .ce-chip-dist{margin-top:0;}
+.ce-fu-move{
+  font-size:11.5px; line-height:1.35; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ce-future:hover .ce-fu-move{color:var(--ink);}
+
+/* choosing: the rest of the futures clear out, the chosen one flies to the roll */
+@keyframes ce-assemble{from{opacity:0; transform:translateY(5px);} to{opacity:1; transform:none;}}
+.ce-futures-list .ce-future{animation:ce-assemble .24s ease backwards; animation-delay:calc(var(--i) * 15ms);}
+@keyframes ce-fu-leave{to{opacity:0; transform:translateX(14px);}}
+@keyframes ce-fu-chosen{
+  30%{transform:translateX(-4px) scale(1.02);}
+  to{opacity:0; transform:translateX(-26px) scale(.94);}
+}
+.ce-future.leaving{animation:ce-fu-leave .17s ease forwards; pointer-events:none;}
+.ce-future.chosen{
+  animation:ce-fu-chosen .17s ease forwards; pointer-events:none;
+  background:color-mix(in srgb, var(--c) 20%, transparent); border-color:var(--c);
+}
 
 .ce-legend{display:flex; flex-wrap:wrap; align-items:center; gap:16px; margin-top:24px; padding-top:14px; border-top:1px solid var(--line);}
 .ce-leg{display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px; color:var(--muted);}
 .ce-leg i{width:11px; height:11px; border-radius:3px; display:inline-block;}
 .ce-leg-note{font-size:11px; color:var(--muted); font-style:italic; margin-left:auto;}
 
+@media (max-width:820px){
+  /* not enough width to sit side by side — futures stack under the roll */
+  .ce-stage{flex-direction:column;}
+  .ce-roll{width:100%;}
+  .ce-futures{flex:1 1 auto; width:100%;}
+}
 @media (max-width:560px){
   .ce-controls{width:100%;}
-  .ce-now-name{font-size:28px;}
-  .ce-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));}
+  .ce-future{grid-template-columns:12px 4.6em 4.2em 2.7em minmax(0,1fr); gap:6px;}
+  .ce-fu-move{font-size:11px;}
 }
 @media (prefers-reduced-motion:reduce){
-  .ce-card{transition:none;}
-  .ce-card:hover{transform:none;}
+  .ce-future{transition:none;}
+  .ce-future:hover{transform:none;}
+  .ce-futures-list .ce-future,
+  .ce-future.leaving, .ce-future.chosen,
+  .ce-roll-note.spawn, .ce-roll-tilewrap.spawn{animation:none;}
+  .ce-roll-note{transition:none;}
 }
 `;

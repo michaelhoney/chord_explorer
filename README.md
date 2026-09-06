@@ -53,10 +53,21 @@ it falls back to system fonts and still works.
 Set a **key** and **major/minor**, then click any chord to start. The **7ths** toggle
 enriches the diatonic chords (V becomes V7, etc.). **Tempo** controls playback speed.
 
-The chords are grouped into **In key** (diatonic) and **Colour** — secondary dominants
-and borrowed chords that sit outside the key for tension and surprise. If you land on a
-secondary dominant, its resolution floats to the top of the next options, flagged as the
-release.
+Every chord you could play next is listed to the right of the progression, one line
+each — name, roman numeral, the voice movement picking it would cost (Δ), and what the
+move *does*. They're **ordered by tension**, most tense at the top, so the list reads as
+a gradient from "outside" down to "home". Hovering a line plays it; clicking commits it,
+and the row flies into the roll and bursts into its note pills while the next set of
+futures assembles.
+
+The list mixes diatonic chords with **colour** — secondary dominants and borrowed chords
+that sit outside the key for tension and surprise. If you land on a secondary dominant,
+its resolution is flagged as the release.
+
+Since that list is the whole vocabulary, it has a **filter**: type `sus`, `♭VII`, `F♯` or
+`maj7` to narrow it — Enter takes the top match, Escape clears. If what you're after is
+behind a toggle it says so and offers the switch ("+16 more with Sus on") rather than just
+coming up empty.
 
 Colour is the whole point: it encodes what a chord *does*.
 
@@ -65,8 +76,9 @@ Colour is the whole point: it encodes what a chord *does*.
 - **Tension** (coral) — dominant, pulling toward home
 - **Outside** (violet) — borrowed / secondary, off the diatonic path
 
-The little line above the progression is a **tension curve**: distance from home over
-time. Watching it climb and fall is the concept made visible.
+The progression itself is a **piano roll**: each voice sits at its pitch height, so
+common tones line up across chords and the voice leading is visible. Each note pill
+carries its semitone step from the previous chord, and plays on its own when clicked.
 
 ## Design notes (why it is the way it is)
 
@@ -75,11 +87,12 @@ real function label — that's the difference between a chord toy and something 
 teaches. To reframe, change the key rather than modulate freely.
 
 **Minor mode** uses the natural-minor diatonic chords as the base, with the
-harmonic-minor dominant (V, V7, vii°) offered in Colour — which is how minor-key music
+harmonic-minor dominant (V, V7, vii°) offered as colour — which is how minor-key music
 actually behaves. The weak natural v stays in-key and honest about being weak.
 
-Voicings are plain root position for clarity, not smoothness. That's the first thing
-worth improving (see the backlog).
+Voice-leading is on by default: each chord's tones are placed nearest the previous
+chord's, so common tones hold and the rest step. Turn it off to hear plain root
+position.
 
 ## Roadmap, roughly in order of fun
 
@@ -100,14 +113,17 @@ worth improving (see the backlog).
 
 ## For a Claude Code agent
 
-You're working on a single-file React component that is really two things bolted
-together: a **pure functional-harmony engine** (the top ~60% of the file) and a
-**React/Tone.js presentation layer** (the rest). Keep that seam clean; it's the main
-lever for testability and for everything on the backlog.
+You're working on two pieces: a **pure functional-harmony engine** and a
+**React/Tone.js presentation layer**. Keep that seam clean; it's the main lever for
+testability and for everything on the backlog.
 
 ### File map
 
-Right now the whole app is `src/ChordExplorer.jsx`. Reading top to bottom:
+- `src/harmony.js` — the engine. No imports at all, so it tests in plain Node.
+- `src/harmony.test.js` — the Vitest suite over it (`npm test`).
+- `src/ChordExplorer.jsx` — the UI, importing the engine's named exports.
+
+Reading the engine top to bottom:
 
 - **Pitch-class layer** — `SHARP` / `FLAT` / `FLAT_KEYS`, `nameOf`. Notes are integers
   0–11; spelling is cosmetic and never affects audio.
@@ -141,8 +157,8 @@ Right now the whole app is `src/ChordExplorer.jsx`. Reading top to bottom:
   it gets a hue via `hueOf`, and a numeric `tension` so it plots on the curve. If you add
   a chord type, wire up both.
 - **The harmony engine is pure.** `buildKey`, `classify`, `optionsFrom`, etc. take data
-  and return data — no React, no Tone, no DOM. Keep it that way; it's what makes the
-  engine unit-testable.
+  and return data — no React, no Tone, no DOM. `harmony.js` has no imports; don't add
+  any. It's what makes the engine unit-testable.
 - **Audio only after a gesture.** `Tone.start()` must be awaited inside a click handler.
   Don't hoist synth creation to module load or a bare `useEffect`.
 - **Pitch classes are integers 0–11.** All harmonic math goes through them. Note strings
@@ -151,31 +167,23 @@ Right now the whole app is `src/ChordExplorer.jsx`. Reading top to bottom:
   in the `CSS` string. In a real Vite project you may move them to a `.css` file; if you
   do, preserve the CSS-variable token system.
 
-### First moves I'd suggest
+### Tests
 
-Before features, do the refactor that unlocks them: **extract the engine into
-`src/harmony.js`** (everything from `SHARP` down through `optionsFrom`) and add a test
-file. The engine is deterministic and pure, so tests are cheap and high-value. Good first
-assertions:
-
-- In C major, `buildKey(0,'major').diatonic` yields `C Dm Em F G Am B°` with romans
-  `I ii iii IV V vi vii°`.
-- With `add7`, degree 4 (V) classifies as a dominant 7th and degree 6 (vii°) as
-  half-diminished (`ø7`).
-- From the tonic, `optionsFrom` ranks V and IV above the tonic-substitute chords.
-- A secondary dominant sets `resolvesTo`, and its target is flagged `resolution: true`
-  and sorted to the front of the next options.
+The engine extraction is done and `src/harmony.test.js` covers it — key building in all
+three modes, `classify`, colour chords and suspensions, `optionsFrom` ranking and cadence
+copy, and the voicing helpers (common tones held, inversion rolls, `computeVoicings`
+purity, midi→note conversion).
 
 ```bash
-npm install -D vitest
-# then: describe/it against src/harmony.js
+npm test         # vitest run
+npm run test:watch
 ```
 
-Then pick from the roadmap above. **Web MIDI** (item 1) touches only the presentation
-layer: add a `navigator.requestMIDIAccess()` output selector and, in `playChord`, send
-note-on/off to the chosen port instead of (or alongside) the synth. It needs a secure
-context — `localhost` counts, so `npm run dev` is fine — and realistically it's
-Chrome-only; surface that in the UI rather than letting it fail silently in Safari.
+Then pick from the roadmap above. **Web MIDI** touches only the presentation layer: add a
+`navigator.requestMIDIAccess()` output selector and, in playback, send note-on/off to the
+chosen port instead of (or alongside) the synth. It needs a secure context — `localhost`
+counts, so `npm run dev` is fine — and realistically it's Chrome-only; surface that in the
+UI rather than letting it fail silently in Safari.
 
 ### Conventions
 
