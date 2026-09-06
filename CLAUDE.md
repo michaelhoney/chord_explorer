@@ -19,12 +19,18 @@ repo root mirrors all three as the canonical copies; `cp` them over at a checkpo
 ```bash
 cd app
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5173/chord_explorer/ (redirects there from /)
 npm test           # vitest run — the engine suite
 npm run lint       # oxlint
 ```
 
 There is no root `package.json`; every script above runs from `app/`.
+
+**Deployment.** `.github/workflows/deploy.yml` builds `app/` and publishes `app/dist` to
+GitHub Pages on every push to `main`, gated on lint and the engine suite. Pages serves the
+repo at `/chord_explorer/`, so `vite.config.js` sets `base` to match — which is also why the
+dev server lives under that path rather than at `/`. Change the repo name and that `base`
+has to change with it, or every asset 404s.
 
 Audio starts on your first click (browsers block autoplay until a gesture — expected). Fonts
 load from Google Fonts via `@import`; offline it falls back to system fonts and still works.
