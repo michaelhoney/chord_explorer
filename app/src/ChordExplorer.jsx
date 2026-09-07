@@ -679,17 +679,33 @@ export default function ChordExplorer() {
       <style>{CSS}</style>
 
       <header className="ce-head">
-        <div className="ce-brand">
-          <span className="ce-mark" aria-hidden="true">↳</span>
-          <div>
-            <h1>Chord Paths</h1>
-            <p className="ce-sub">
-              Pick a chord, hear it, and follow where it wants to go.
-            </p>
+        <div className="ce-topline">
+          <div className="ce-brand">
+            <span className="ce-mark" aria-hidden="true">↳</span>
+            <div>
+              <h1>Chord Paths</h1>
+              <p className="ce-sub">
+                Pick a chord, hear it, and follow where it wants to go.
+              </p>
+            </div>
           </div>
+
+          {/* sharing is about the page, not about editing the progression, so it
+              sits up here rather than in the transport */}
+          <button
+            className={"ce-share" + (copied ? " copied" : "")}
+            onClick={share}
+            disabled={!prog.length}
+            aria-label={copied ? "Link copied" : "Copy a link to this progression"}
+            title={copied ? "Link copied" : "Copy a link to this progression"}
+          >
+            {copied ? <Tick /> : <ShareIcon />}
+          </button>
         </div>
 
         <div className="ce-controls">
+          {/* what chords there are to choose from, and one that picks for you */}
+          <div className="ce-cgroup">
           <label className="ce-field">
             <span>Key</span>
             <select
@@ -736,6 +752,29 @@ export default function ChordExplorer() {
             Sus
           </button>
 
+          <span className="ce-suggest">
+            <button
+              className="ce-toggle"
+              onClick={suggest}
+              title={`Propose a ${bars}-bar loop — click again to re-roll. Replaces the progression.`}
+            >
+              Suggest
+            </button>
+            <select
+              value={bars}
+              onChange={(e) => setBars(Number(e.target.value))}
+              aria-label="Bars in a suggested loop"
+              title="How many bars the suggestion should be"
+            >
+              {[2, 4, 8].map((b) => (
+                <option key={b} value={b}>{b} bars</option>
+              ))}
+            </select>
+          </span>
+          </div>
+
+          {/* how the progression sounds when it plays */}
+          <div className="ce-cgroup">
           <button
             className={"ce-toggle" + (voiceLead ? " on" : "")}
             aria-pressed={voiceLead}
@@ -802,6 +841,7 @@ export default function ChordExplorer() {
               onChange={(e) => setTempo(Number(e.target.value))}
             />
           </label>
+          </div>
         </div>
       </header>
 
@@ -824,34 +864,8 @@ export default function ChordExplorer() {
             >
               {playing ? "■ Stop" : "▶ Play"}
             </button>
-            <span className="ce-suggest">
-              <button
-                onClick={suggest}
-                title={`Propose a ${bars}-bar loop — click again to re-roll. Replaces the progression.`}
-              >
-                Suggest
-              </button>
-              <select
-                value={bars}
-                onChange={(e) => setBars(Number(e.target.value))}
-                aria-label="Bars in a suggested loop"
-                title="How many bars the suggestion should be"
-              >
-                {[2, 4, 8].map((b) => (
-                  <option key={b} value={b}>{b} bars</option>
-                ))}
-              </select>
-            </span>
             <button onClick={undo} disabled={!prog.length}>Undo</button>
             <button onClick={clear} disabled={!prog.length}>Clear</button>
-            <button
-              className={"ce-share" + (copied ? " copied" : "")}
-              onClick={share}
-              disabled={!prog.length}
-              title="Copy a link to this progression"
-            >
-              {copied ? "✓ Copied" : "Share"}
-            </button>
           </div>
         </div>
 
@@ -1047,6 +1061,25 @@ const stepTitle = (n) =>
   n === 0
     ? "this voice holds"
     : `this voice moves ${signed(n)} semitone${Math.abs(n) === 1 ? "" : "s"}`;
+
+const ShareIcon = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"
+       fill="none" stroke="currentColor" strokeWidth="1.5"
+       strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="3.6" r="2.1" />
+    <circle cx="4" cy="8" r="2.1" />
+    <circle cx="12" cy="12.4" r="2.1" />
+    <path d="M5.9 6.9 L10.1 4.7 M5.9 9.1 L10.1 11.3" />
+  </svg>
+);
+
+const Tick = () => (
+  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"
+       fill="none" stroke="currentColor" strokeWidth="1.9"
+       strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 8.4 L6.4 11.8 L13 5.2" />
+  </svg>
+);
 
 const Chevron = ({ up }) => (
   <svg viewBox="0 0 12 8" width="11" height="7" aria-hidden="true" focusable="false">
@@ -1266,11 +1299,31 @@ const CSS = `
 .ce-root h1{font-size:22px; font-weight:700; letter-spacing:-.02em; margin:0;}
 .ce-sub{margin:2px 0 0; font-size:12.5px; color:var(--muted); max-width:46ch; line-height:1.4;}
 
-.ce-head{display:flex; flex-wrap:wrap; gap:16px; justify-content:space-between; align-items:flex-start;}
+/* Three zones, reading down: who this is (and the share action for the page),
+   then what chords there are, then how they sound. The transport — play and
+   edit what's already there — lives with the progression itself. */
+.ce-head{display:flex; flex-direction:column; gap:16px;}
+.ce-topline{display:flex; gap:16px; justify-content:space-between; align-items:flex-start;}
 .ce-brand{display:flex; gap:12px; align-items:flex-start;}
+
+.ce-share{
+  flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+  width:32px; height:32px; padding:0; border-radius:9px;
+  border:1px solid var(--line); background:var(--panel); color:var(--muted);
+  cursor:pointer; transition:background .12s ease, color .12s ease, border-color .12s ease;
+}
+.ce-share:hover:not(:disabled){background:var(--bg); color:var(--ink); border-color:var(--ink);}
+.ce-share:focus-visible{outline:2px solid var(--ink); outline-offset:2px;}
+.ce-share:disabled{opacity:.35; cursor:default;}
+.ce-share.copied:not(:disabled){background:var(--home); border-color:var(--home); color:var(--panel);}
 .ce-mark{font-size:26px; line-height:1; color:var(--tension); transform:translateY(2px);}
 
-.ce-controls{display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;}
+/* chord population on the left, playback preferences pushed right */
+.ce-controls{display:flex; flex-wrap:wrap; gap:14px 24px; align-items:flex-end;}
+.ce-cgroup{display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;}
+/* margin, not justify-content:space-between — when the two groups wrap onto
+   separate rows, space-between leaves the playback group stranded left */
+.ce-cgroup + .ce-cgroup{margin-left:auto;}
 .ce-field{display:flex; flex-direction:column; gap:4px;}
 .ce-field>span{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted);}
 .ce-field select{
@@ -1304,14 +1357,14 @@ const CSS = `
   border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer;
 }
 .ce-transport button:disabled{opacity:.4; cursor:default;}
-.ce-suggest{display:inline-flex; align-items:stretch; gap:0;}
-.ce-suggest button{border-top-right-radius:0; border-bottom-right-radius:0;}
+.ce-suggest{display:inline-flex; align-items:stretch; align-self:flex-end;}
+.ce-suggest .ce-toggle{align-self:auto; border-radius:9px 0 0 9px;}
 .ce-suggest select{
-  font-family:var(--mono); font-size:11px; padding:0 4px 0 6px; cursor:pointer;
-  border:1px solid var(--line); border-left:0; border-radius:0 8px 8px 0;
-  background:var(--bg); color:var(--muted);
+  font-family:var(--mono); font-size:11px; padding:0 6px 0 7px; cursor:pointer;
+  border:1px solid var(--line); border-left:0; border-radius:0 9px 9px 0;
+  background:var(--panel); color:var(--muted);
 }
-.ce-suggest select:hover{color:var(--ink);}
+.ce-suggest .ce-toggle:hover, .ce-suggest select:hover{color:var(--ink);}
 .ce-transport button:first-child{background:var(--ink); color:var(--panel); border-color:var(--ink);}
 .ce-transport button:first-child:disabled{background:var(--bg); color:var(--ink);}
 .ce-transport button.ce-playing{background:var(--tension); border-color:var(--tension); color:var(--panel);}

@@ -110,6 +110,17 @@ The engine, reading top to bottom:
 - **`score()` / `salience()` / `optionsFrom(current, key)`** — ranks the next-chord options.
   `optionsFrom` is what the UI calls; it decorates each option with `move`, `motion`, and a
   `resolution` flag.
+- **Controls are grouped by what they act on**, which is the layout's whole organising idea:
+  `.ce-cgroup` one is **chord population** (key, mode, 7ths, Sus, Suggest) flush left;
+  `.ce-cgroup` two is **playback preferences** (voice-leading, arpeggio, loop, output, tempo)
+  pushed right; and **transport & edit** (play, undo, clear) lives down with the progression
+  it acts on. Suggest belongs with the first group rather than the transport because it sets
+  up material rather than editing what's there — the same reason changing key clears the
+  progression. The right-hand group is pushed over with `margin-left:auto` on
+  `.ce-cgroup + .ce-cgroup`, **not** `justify-content:space-between`: the groups wrap onto
+  separate rows on a narrow screen, and space-between would strand the playback group on the
+  left of its own row. Sharing is about the page rather than the progression, so it's an icon
+  at the top right of `.ce-topline`, outside all three groups.
 - **`useMidiOut()`** — the **Output** selector. `status` is a small state machine
   (`unsupported | insecure | idle | asking | ready | denied`) whose copy lives in
   `MIDI_STATUS`; on a successful enable it selects the first available port straight away —
