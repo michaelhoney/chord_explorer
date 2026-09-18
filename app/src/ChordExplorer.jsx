@@ -446,7 +446,7 @@ function decodeState(search) {
   const evolve = p.get("ev") === "1";
   const mutLevel = clampNum(p.get("ml"), 1, 1, 4);
   const susOn = p.get("su") === "1";
-  const tempo = clampNum(p.get("t"), 96, 60, 140);
+  const tempo = clampNum(p.get("t"), 96, 30, 150);
   const sound = unpackSynth(p.get("sy")); // clamps per parameter; absent → default
   const pool = (() => {
     const key = resolveKey(root, mode, add7);
@@ -1357,16 +1357,16 @@ export default function ChordExplorer() {
                 />
               </Field>
             </div>
-            {/* 80 bars for 60–140: one bar is one beat per minute */}
+            {/* 120 bars for 30–150: one bar is one beat per minute */}
             <Level
               wide
               label="Tempo"
-              n={80}
-              pos={(tempo - 60) / 80}
+              n={120}
+              pos={(tempo - 30) / 120}
               text={String(tempo)}
               title="Beats per minute — each chord lasts two beats"
-              onPos={(p) => setTempo(Math.round(60 + p * 80))}
-              onStep={(d) => setTempo((t) => Math.min(140, Math.max(60, t + d)))}
+              onPos={(p) => setTempo(Math.round(30 + p * 120))}
+              onStep={(d) => setTempo((t) => Math.min(150, Math.max(30, t + d)))}
             />
           </div>
         </section>
@@ -2452,6 +2452,8 @@ body{margin:0; background:#F3F3F0;}
 .ce-lvl-bar i.lit{background:var(--ink);}
 .ce-lvl.wide{max-width:520px;}
 .ce-lvl.wide .ce-lvl-bar{height:36px;}
+/* 120 bars for tempo: thinner, so they still have air between them */
+.ce-lvl.wide .ce-lvl-bar i{width:2px;}
 .ce-lvl.wide .ce-lvl-val{font-size:38px; letter-spacing:-.01em;}
 
 /* --- the display: a white e-ink panel, ink and nothing else -------------- */

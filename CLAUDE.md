@@ -166,7 +166,7 @@ The engine, reading top to bottom:
 - **`Level`** — what every slider became: a row of thin bars, lit in ink up to the value. It
   replaces a range input, so it carries `role="slider"`, `aria-valuetext`, arrows (Shift for
   ten), Home and End. `pos` is 0–1 and the caller maps it; `onStep` optionally owns the
-  arrows (tempo's 80 bars are one BPM each, and an arrow is one BPM). The drag is driven from
+  arrows (tempo's 120 bars, 30–150, are one BPM each, and an arrow is one BPM). The drag is driven from
   `window` listeners that also let go when `buttons` is 0 — the same lesson as the roll's
   reordering. `onCommit` fires on release, which is when the Sound module auditions.
 - **`useMidiOut()`** — behind module 04's **Route** keys (Int / MIDI) and port list. `status` is a small state machine
