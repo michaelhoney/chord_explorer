@@ -329,9 +329,9 @@ const MAX_GENS = 24;
 
 // Mutate's levels: that many quarters of the bars. Only "all" touches bar 1
 const MUT_LEVELS = [
-  ["¼", "about a quarter of the bars"],
-  ["½", "about half the bars"],
-  ["¾", "about three quarters of the bars"],
+  ["1/4", "about a quarter of the bars"],
+  ["1/2", "about half the bars"],
+  ["3/4", "about three quarters of the bars"],
   ["all", "every bar, the first one too"],
 ];
 function pushGen(h, prog) {
