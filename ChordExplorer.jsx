@@ -418,6 +418,17 @@ function writeUrl(path) {
   }
 }
 
+// A naked URL — no query string at all — opens somewhere rather than on an empty
+// page: a random key, major or minor, with a 4-bar suggestion on the roll, ready
+// for Play. Waiting rather than playing, since audio can't start before a press.
+// A link with any state in it opens exactly as written (see decodeState).
+function randomStart() {
+  const root = Math.floor(Math.random() * 12);
+  const mode = Math.random() < 0.5 ? "major" : "minor";
+  const prog = suggestLoop(resolveKey(root, mode, false), { bars: 4 }).map((c, i) => ({ ...c, id: i + 1 }));
+  return { root, mode, prog };
+}
+
 function decodeState(search) {
   const p = new URLSearchParams(search);
   if (![...p.keys()].length) return null;
@@ -472,7 +483,7 @@ function decodeState(search) {
 }
 
 export default function ChordExplorer() {
-  const boot = useMemo(() => decodeState(window.location.search) || {}, []);
+  const boot = useMemo(() => decodeState(window.location.search) || randomStart(), []);
   const [root, setRoot] = useState(boot.root ?? 0);
   const [mode, setMode] = useState(boot.mode ?? "major");
   const [add7, setAdd7] = useState(boot.add7 ?? false);

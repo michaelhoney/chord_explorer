@@ -239,6 +239,10 @@ The engine, reading top to bottom:
   playback is running, which is already making the point. The preset name is **derived** by
   comparing values rather than stored, so a shared link carrying only numbers still opens
   with the right name in the dropdown, and nudging one slider honestly reads as "Custom".
+- **Random start** — `boot` is `decodeState(search) || randomStart()`: only a URL with **no
+  query string at all** gets a random key and a 4-bar suggestion; any parameter, even `?k=0`,
+  opens exactly as written, so a shared link or a reload is never re-rolled. The URL sync
+  then writes the rolled state into the address bar, so a reload keeps it.
 - **URL sync** — the query string is computed every render (`path`), but written to the
   address bar only after 300ms without a change, and flushed on `pagehide`. Never per change:
   a slider drag changes state every frame, and Safari allows 100 `replaceState` calls per 10
@@ -434,9 +438,8 @@ Roughly in order of fun (see README for detail):
    in the share link.
 6. **Save progressions** — localStorage or export to a small text format.
 7. **Export** — MIDI file, or a chord-chart / lead-sheet string.
-8. **Random start** — a naked URL (no query string) opens in a random key, major or minor,
-   with a 4-bar `suggestLoop` already in the progression, so a first visit starts with
-   something to play rather than an empty page. A shared link still opens exactly as written.
+8. ✅ **Random start** — done; `randomStart()` gives a naked URL a random key (major or
+   minor) and a 4-bar `suggestLoop`, waiting for Play. Any query string opens as written.
 9. ✅ **Evolve** — done; **Mutate** (once) and **Evolve** (each time the loop comes round)
    via `mutateLoop`, with the live-cursor playback, the queue and the history strip.
 
