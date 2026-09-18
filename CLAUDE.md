@@ -415,6 +415,12 @@ Roughly in order of fun (see README for detail):
    in the share link.
 6. **Save progressions** — localStorage or export to a small text format.
 7. **Export** — MIDI file, or a chord-chart / lead-sheet string.
+8. **Random start** — a naked URL (no query string) opens in a random key, major or minor,
+   with a 4-bar `suggestLoop` already in the progression, so a first visit starts with
+   something to play rather than an empty page. A shared link still opens exactly as written.
+9. **Evolve** — a toggle beside Loop: every time the loop comes round, replace the
+   progression with a fresh suggestion of the same length (same key), so a loop keeps
+   changing while it plays.
 
 ### Testing
 
