@@ -234,10 +234,10 @@ Reading the engine top to bottom:
 
 ### Invariants — don't break these
 
-- **Colour = function is load-bearing pedagogy.** Every chord *must* be assigned a
-  `func` (one of `tonic | predominant | dominant | subtonic | secondary | borrowed`) so
-  it gets a hue via `hueOf`, and a numeric `tension` so it plots on the curve. If you add
-  a chord type, wire up both.
+- **Function is load-bearing pedagogy.** Every chord *must* be assigned a
+  `func` (one of `tonic | predominant | dominant | subtonic | secondary | borrowed`),
+  which the next-chord list prints beside each chord, and a numeric `tension`, which
+  lights its tension meter. If you add a chord type, wire up both.
 - **The model modules are pure.** `buildKey`, `classify`, `optionsFrom`, `velocityCurve`,
   etc. take data and return data — no React, no Tone, no DOM. `harmony.js` and `synth.js`
   have no imports; don't add

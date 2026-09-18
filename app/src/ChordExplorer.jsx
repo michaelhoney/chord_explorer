@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import * as Tone from "tone";
 import {
-  SHARP,
   nameOf,
   mod12,
   hueOf,
@@ -280,12 +279,6 @@ const HUE = {
   tension: "var(--tension)",
   outside: "var(--outside)",
 };
-const HUE_LABEL = {
-  home: "Home",
-  build: "Build",
-  tension: "Tension",
-  outside: "Outside",
-};
 
 // what the Output control says before a port can be picked
 const MIDI_STATUS = {
@@ -500,7 +493,8 @@ export default function ChordExplorer() {
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
   const [tempo, setTempo] = useState(boot.tempo ?? 96);
   const [sound, setSound] = useState(boot.sound ?? defaultSound());
-  const [soundOpen, setSoundOpen] = useState(false);
+  // the colour every light on the face burns, a new one each visit
+  const [lamp, setLamp] = useState(() => LAMPS[Math.floor(Math.random() * LAMPS.length)]);
   // Progressions come in generations (see pushGen); `cur` is the one on the
   // roll. Per visit, not in the URL — a link carries only the current one.
   const [hist, setHist] = useState(() => ({ gens: [boot.prog ?? []], cur: 0 }));
@@ -1095,6 +1089,9 @@ export default function ChordExplorer() {
     [voicings, bassOn, prog, playVoiced, setProg]
   );
   const changeKey = (r, m) => {
+    // the key is a row of lit keys now, and pressing the lit one again
+    // shouldn't wipe the progression
+    if (r === root && m === mode) return;
     setRoot(r);
     setMode(m);
     setHist({ gens: [[]], cur: 0 }); // other keys' progressions would read wrong here
@@ -1121,24 +1118,57 @@ export default function ChordExplorer() {
     setTimeout(() => setCopied(false), 1400);
   }, [path]);
 
+  const keyName = nameOf(root, root);
+  // Output is a two-key group, Int / MIDI. MIDI is the key that asks for access
+  // when there isn't any yet; once granted, useMidiOut lands on the first port.
+  const routeMidi = midi.portId !== "";
+  const midiDead = midi.status !== "ready" && MIDI_STATUS[midi.status].dead;
+  const pickOutput = (v) => {
+    if (v === "int") {
+      midiPanic(); // silence the port we're leaving, mid-note or not
+      return midi.setPortId("");
+    }
+    if (midi.status !== "ready") return midi.enable();
+    if (!routeMidi && midi.outputs.length) midi.setPortId(midi.outputs[0].id);
+  };
+  // one row of keys for what was Arpeggio plus its order: block, rising, random
+  const arpMode = arp ? arpOrder : "off";
+  const setArpMode = (v) => {
+    setArp(v !== "off");
+    if (v !== "off") setArpOrder(v);
+  };
+  const genNames = (p) => (p.length ? p.map((c) => c.name).join(" ") : "empty");
+
   return (
-    <div className="ce-root">
+    <div className="ce-root" style={{ "--lamp": lamp }}>
       <style>{CSS}</style>
 
-      <header className="ce-head">
-        <div className="ce-topline">
-          <div className="ce-brand">
-            <span className="ce-mark" aria-hidden="true">↳</span>
-            <div>
-              <h1>Chord Paths</h1>
-              <p className="ce-sub">
-                Pick a chord, hear it, and follow where it wants to go.
-              </p>
-            </div>
-          </div>
+      {/* the colour the lights burn, a new one each visit — not in the URL,
+          since it's about this visit rather than the progression */}
+      <div className="ce-lamps" role="radiogroup" aria-label="Lamp colour">
+        {LAMPS.map((c) => (
+          <button
+            key={c}
+            role="radio"
+            aria-checked={lamp === c}
+            aria-label={`Lamp colour ${c}`}
+            style={{ "--sw": c }}
+            onClick={() => setLamp(c)}
+          />
+        ))}
+      </div>
 
-          {/* sharing is about the page, not about editing the progression, so it
-              sits up here rather than in the transport */}
+      <div className="ce-chassis">
+        <header className="ce-mod ce-plate">
+          <h1>chord paths</h1>
+          <div className="ce-leds" aria-hidden="true">
+            <span className={"ce-led" + (playing ? " on" : "")}><i />Play</span>
+            <span className={"ce-led" + (loop ? " on" : "")}><i />Loop</span>
+            <span className={"ce-led" + (midiActive ? " on" : "")}><i />MIDI</span>
+          </div>
+          <div className="ce-grille" aria-hidden="true" />
+          {/* sharing is about the page, not the progression, so it's up here
+              rather than in any of the modules */}
           <button
             className={"ce-share" + (copied ? " copied" : "")}
             onClick={share}
@@ -1148,362 +1178,372 @@ export default function ChordExplorer() {
           >
             {copied ? <Tick /> : <ShareIcon />}
           </button>
-        </div>
+        </header>
 
-        {/* the controls and the sound panel share a wrapper so the concertina
-            can sit flush when it's closed — .ce-head's row gap would otherwise
-            leave a permanent strip of dead space under the control row */}
-        <div className="ce-console">
-        <div className="ce-controls">
-          {/* what chords there are to choose from, and one that picks for you */}
-          <div className="ce-cgroup">
-          <label className="ce-field">
-            <span>Key</span>
-            <select
-              value={root}
-              onChange={(e) => changeKey(Number(e.target.value), mode)}
-            >
-              {SHARP.map((_, i) => (
-                <option key={i} value={i}>
-                  {nameOf(i, i)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="ce-seg" role="group" aria-label="Mode">
-            {[["major", "major"], ["minor", "minor"], ["mixolydian", "mixo"]].map(([m, label]) => (
-              <button
-                key={m}
-                className={mode === m ? "on" : ""}
-                aria-pressed={mode === m}
-                title={m}
-                onClick={() => changeKey(root, m)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <button
-            className={"ce-toggle" + (add7 ? " on" : "")}
-            aria-pressed={add7}
-            onClick={() => setAdd7((v) => !v)}
-            title="Add sevenths to the diatonic chords"
-          >
-            7ths
-          </button>
-
-          <button
-            className={"ce-toggle" + (susOn ? " on" : "")}
-            aria-pressed={susOn}
-            onClick={() => setSusOn((v) => !v)}
-            title="Offer suspended chords (sus2 / sus4) that resolve to their triad"
-          >
-            Sus
-          </button>
-
-          <span className="ce-suggest">
-            <button
-              className="ce-toggle"
-              onClick={suggest}
-              title={`Propose a ${bars}-bar loop — click again to re-roll. The one it replaces stays in the history; while playing, it waits for the loop to come round.`}
-            >
-              Suggest
-            </button>
-            <select
-              value={bars}
-              onChange={(e) => setBars(Number(e.target.value))}
-              aria-label="Bars in a suggested loop"
-              title="How many bars the suggestion should be"
-            >
-              {[2, 4, 8].map((b) => (
-                <option key={b} value={b}>{b} bars</option>
-              ))}
-            </select>
-          </span>
-
-          <span className="ce-suggest">
-            <button
-              className="ce-toggle"
-              onClick={mutate}
-              disabled={prog.length < 2}
-              title={`Change ${MUT_LEVELS[mutLevel - 1][1]}${mutLevel < 4 ? ", keeping bar 1 and your edits" : ""}. The original stays in the history; while playing, the change waits for the loop to come round.`}
-            >
-              Mutate
-            </button>
-            <select
-              value={mutLevel}
-              onChange={(e) => setMutLevel(Number(e.target.value))}
-              aria-label="How much a mutation changes"
-              title="How much Mutate changes — Evolve uses this too"
-            >
-              {MUT_LEVELS.map(([label], i) => (
-                <option key={i} value={i + 1}>{label}</option>
-              ))}
-            </select>
-          </span>
-          </div>
-
-          {/* how the progression sounds when it plays */}
-          <div className="ce-cgroup">
-          <button
-            className={"ce-toggle" + (voiceLead ? " on" : "")}
-            aria-pressed={voiceLead}
-            onClick={() => setVoiceLead((v) => !v)}
-            title="Use inversions to minimise the distance each voice moves between chords"
-          >
-            Voice-leading
-          </button>
-
-          <button
-            className={"ce-toggle" + (bassOn ? " on" : "")}
-            aria-pressed={bassOn}
-            onClick={() => setBassOn((v) => !v)}
-            title="Add a bass voice under each chord: the root, unless a tile's arrows pick another chord tone. It moves to the nearest octave, like a bass line"
-          >
-            Bass
-          </button>
-
-          {/* Arpeggio and what shapes it, kept together so they wrap as one.
-              Provisional layout — this is due a design pass. */}
-          <span className="ce-arp">
-            <button
-              className={"ce-toggle" + (arp ? " on" : "")}
-              aria-pressed={arp}
-              onClick={() => setArp((v) => !v)}
-              title="Play each chord one note at a time, spread evenly across its slot"
-            >
-              Arpeggio
-            </button>
-            <button
-              className={"ce-toggle" + (arpFour ? " on" : "")}
-              aria-pressed={arpFour}
-              disabled={!arp}
-              onClick={() => setArpFour((v) => !v)}
-              title="Four steps per chord: a three-note chord plays 1 3 5 3, so every chord keeps the same rhythm"
-            >
-              -4-
-            </button>
-            <span className="ce-seg" role="group" aria-label="Arpeggio order">
-              {[["rise", "Low to high"], ["random", "A new random order each time the chord plays"]].map(([o, hint]) => (
-                <button
-                  key={o}
-                  className={arpOrder === o ? "on" : ""}
-                  aria-pressed={arpOrder === o}
-                  disabled={!arp}
-                  title={hint}
-                  onClick={() => setArpOrder(o)}
-                >
-                  {o}
-                </button>
-              ))}
-            </span>
-            <button
-              className={"ce-toggle" + (holdBass ? " on" : "")}
-              aria-pressed={holdBass}
-              disabled={!arp || !bassOn}
-              onClick={() => setHoldBass((v) => !v)}
-              title={bassOn
-                ? "Hold the bass for the whole chord under the arpeggio, instead of playing it as the arpeggio's first step"
-                : "Holds the bass under the arpeggio — turn Bass on to use it"}
-            >
-              hold bass
-            </button>
-          </span>
-
-          <button
-            className={"ce-toggle" + (loop ? " on" : "")}
-            aria-pressed={loop}
-            onClick={() => setLoop((v) => !v)}
-            title="Repeat the progression until you press Stop"
-          >
-            Loop
-          </button>
-
-          <button
-            className={"ce-toggle" + (evolve ? " on" : "")}
-            aria-pressed={evolve}
-            disabled={!loop}
-            onClick={() => setEvolve((v) => !v)}
-            title={loop
-              ? "Mutate the progression every time the loop comes round, so it keeps changing while it plays. Every version stays in the history"
-              : "Mutates the loop each time it comes round — turn Loop on to use it"}
-          >
-            Evolve
-          </button>
-
-          <label className="ce-field">
-            <span>Output</span>
-            {midi.status === "ready" ? (
-              <select
-                value={midi.portId}
-                title="Send notes to an external instrument instead of the built-in synth"
-                onChange={(e) => {
-                  midiPanic(); // silence the port we're leaving, mid-note or not
-                  midi.setPortId(e.target.value);
-                }}
-              >
-                <option value="">Internal synth</option>
-                {midi.outputs.length ? (
-                  midi.outputs.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))
-                ) : (
-                  <option disabled>No MIDI outputs found</option>
-                )}
-              </select>
-            ) : (
-              <button
-                className="ce-toggle ce-midi"
-                onClick={midi.enable}
-                disabled={MIDI_STATUS[midi.status].dead}
-                title={MIDI_STATUS[midi.status].hint}
-              >
-                {MIDI_STATUS[midi.status].label}
-              </button>
-            )}
-          </label>
-
-          <label className="ce-field ce-tempo">
-            <span>Tempo {tempo}</span>
-            <input
-              type="range" min="60" max="140" value={tempo}
-              onChange={(e) => setTempo(Number(e.target.value))}
-            />
-          </label>
-
-          {/* opens the concertina below — a playback preference like the rest
-              of this group, just one with sixteen knobs behind it */}
-          <button
-            className={"ce-toggle ce-sound-btn" + (soundOpen ? " on" : "")}
-            aria-expanded={soundOpen}
-            aria-controls="ce-sound-panel"
-            onClick={() => setSoundOpen((v) => !v)}
-            title="Shape the built-in synth — waveform, envelope, filter and its LFO, space"
-          >
-            Sound<span className="ce-chev" aria-hidden="true">▾</span>
-          </button>
-          </div>
-          </div>
-
-          <SoundPanel
-            open={soundOpen}
-            sound={sound}
-            setSound={setSound}
-            onAudition={auditionSound}
-            midiActive={midiActive}
-          />
-        </div>
-      </header>
-
-      {/* progression + tension curve */}
-      <section className="ce-track">
-        <div className="ce-track-head">
-          <span className="ce-eyebrow">
-            Progression
-            {prog.length > 1 && (
-              <span className="ce-total-motion" title="Total semitones of voice movement across the progression — lower is smoother">
-                {" · "}Δ{totalMotion} total
-              </span>
-            )}
-          </span>
-          <div className="ce-transport">
-            <button
-              onClick={playAll}
-              disabled={!prog.length}
-              className={playing ? "ce-playing" : ""}
-            >
-              {playing ? "■ Stop" : "▶ Play"}
-            </button>
-            <button onClick={undo} disabled={!prog.length}>Undo</button>
-            <button onClick={clear} disabled={!prog.length}>Clear</button>
-          </div>
-        </div>
-
-        {/* every progression this visit, oldest on the left; what's queued for
-            when the loop comes round sits on the right, dashed */}
-        {(hist.gens.length > 1 || liveRef.current.next) && (
-          <ol className="ce-gens" ref={gensRef} aria-label="Progression history">
-            {hist.gens.map((g, i) => {
-              const waiting = queued?.kind === "goto" && queued.idx === i;
-              return (
-                <li key={i}>
-                  <button
-                    className={"ce-gen" + (i === hist.cur ? " on" : "") + (waiting ? " next" : "")}
-                    aria-current={i === hist.cur ? "true" : undefined}
-                    onClick={() => goto(i)}
-                    title={i === hist.cur
-                      ? playing && queued ? "Stay on this one: drop what's waiting" : "Playing now"
-                      : playing ? "Play this one when the loop comes round" : "Go back to this one"}
+        {/* 01–02: what chords there are, and something that picks for you */}
+        <section className="ce-mod ce-m-key" aria-labelledby="ce-h-key">
+          <ModHead n="01" id="ce-h-key">Key</ModHead>
+          <div className="ce-stack">
+            <Field label="Root">
+              <RootKeys root={root} onPick={(r) => changeKey(r, mode)} />
+            </Field>
+            <div className="ce-row">
+              <Field label="Mode">
+                <Keys
+                  label="Mode"
+                  value={mode}
+                  onChange={(m) => changeKey(root, m)}
+                  options={[
+                    { v: "major", label: "Maj", title: "Major" },
+                    { v: "minor", label: "Min", title: "Minor — natural, with the harmonic-minor dominant as a colour chord" },
+                    { v: "mixolydian", label: "Mix", title: "Mixolydian — major with a flat seventh" },
+                  ]}
+                />
+              </Field>
+              <Field label="Chords">
+                <div className="ce-bg">
+                  <Toggle on={add7} onClick={() => setAdd7((v) => !v)} title="Add sevenths to the diatonic chords">
+                    7
+                  </Toggle>
+                  <Toggle
+                    on={susOn}
+                    onClick={() => setSusOn((v) => !v)}
+                    title="Offer suspended chords (sus2 / sus4) that resolve to their triad"
                   >
-                    {waiting && <span className="ce-gen-tag">next</span>}
-                    <GenNames prog={g} />
-                  </button>
-                </li>
-              );
-            })}
-            {liveRef.current.next && queued.kind !== "goto" && (
-              <li>
-                <span
-                  className="ce-gen ghost"
-                  title={queued.auto ? "Evolve: plays when the loop comes round" : "Plays when the loop comes round"}
-                >
-                  <span className="ce-gen-tag">next</span>
-                  <GenNames prog={nextProg} against={prog} />
-                </span>
-              </li>
-            )}
-          </ol>
-        )}
+                    Sus
+                  </Toggle>
+                </div>
+              </Field>
+            </div>
+          </div>
+        </section>
 
-        {blocked && !noSoundDismissed && (
-          <div className="ce-nosound" role="status">
-            <p>
-              <b>No sound?</b> Your browser is blocking audio on this page. In Safari:
-              Safari menu → <i>Settings for {window.location.hostname}…</i> → Auto-Play →{" "}
-              <i>Allow All Auto-Play</i>, then reload. In other browsers, look for a sound
-              or autoplay permission under the icon at the left of the address bar.
-            </p>
+        <section className="ce-mod ce-m-gen" aria-labelledby="ce-h-gen">
+          <ModHead n="02" id="ce-h-gen">Generate</ModHead>
+          <div className="ce-stack">
+            <div className="ce-row">
+              <Field label="Suggest">
+                <button
+                  className="ce-key"
+                  onClick={suggest}
+                  title={`Propose a ${bars}-bar loop — press again to re-roll. The one it replaces stays in the history; while playing, it waits for the loop to come round.`}
+                >
+                  {SYM.suggest}New loop
+                </button>
+              </Field>
+              <Field label="Bars">
+                <Keys
+                  label="Bars in a suggested loop"
+                  value={bars}
+                  onChange={setBars}
+                  options={[2, 4, 8].map((b) => ({ v: b, label: String(b), title: `Suggest ${b}-bar loops` }))}
+                />
+              </Field>
+            </div>
+            <div className="ce-row">
+              <Field label="Mutate">
+                <button
+                  className="ce-key"
+                  onClick={mutate}
+                  disabled={prog.length < 2}
+                  title={`Change ${MUT_LEVELS[mutLevel - 1][1]}${mutLevel < 4 ? ", keeping bar 1 and your edits" : ""}. The original stays in the history; while playing, the change waits for the loop to come round.`}
+                >
+                  {SYM.mutate}Once
+                </button>
+              </Field>
+              <Field label="Amount">
+                <Steps value={mutLevel} onChange={setMutLevel} />
+              </Field>
+            </div>
+            <Field label="Evolve each loop">
+              <Keys
+                label="Evolve"
+                value={evolve}
+                disabled={!loop}
+                onChange={setEvolve}
+                options={[
+                  { v: false, label: "Off", title: "Keep the loop as it is" },
+                  {
+                    v: true,
+                    label: "Evo",
+                    title: loop
+                      ? "Mutate the progression every time the loop comes round, so it keeps changing while it plays. Every version stays in the history"
+                      : "Mutates the loop each time it comes round — turn Loop on to use it",
+                  },
+                ]}
+              />
+            </Field>
+          </div>
+        </section>
+
+        {/* 03–04: how the progression sounds when it plays, and where it goes */}
+        <section className="ce-mod ce-m-play" aria-labelledby="ce-h-play">
+          <ModHead n="03" id="ce-h-play">Playback</ModHead>
+          <div className="ce-stack">
+            <div className="ce-row">
+              <Field label="Voicing">
+                <Keys
+                  label="Voicing"
+                  value={voiceLead}
+                  onChange={setVoiceLead}
+                  options={[
+                    { v: false, label: SYM.rootPos, aria: "Root position", title: "Root position: every chord stacked up from its own root" },
+                    { v: true, label: SYM.voiceLed, aria: "Voice-leading", title: "Voice-leading: inversions that move each voice as little as possible between chords" },
+                  ]}
+                />
+              </Field>
+              <Field label="Bass">
+                <div className="ce-bg">
+                  <Toggle
+                    on={bassOn}
+                    onClick={() => setBassOn((v) => !v)}
+                    aria-label="Bass voice"
+                    title="Add a bass voice under each chord: the root, unless a tile's arrows pick another chord tone. It moves to the nearest octave, like a bass line"
+                  >
+                    B
+                  </Toggle>
+                  <Toggle
+                    on={holdBass}
+                    disabled={!arp || !bassOn}
+                    onClick={() => setHoldBass((v) => !v)}
+                    aria-label="Hold the bass"
+                    title={bassOn && arp
+                      ? "Hold the bass for the whole chord under the arpeggio, instead of playing it as the arpeggio's first step"
+                      : "Holds the bass under an arpeggio — needs Bass on and an arpeggio"}
+                  >
+                    {SYM.hold}
+                  </Toggle>
+                </div>
+              </Field>
+              <Field label="Loop">
+                <div className="ce-bg">
+                  <Toggle
+                    on={loop}
+                    onClick={() => setLoop((v) => !v)}
+                    aria-label="Loop"
+                    title="Repeat the progression until you press Stop"
+                  >
+                    {SYM.loop}
+                  </Toggle>
+                </div>
+              </Field>
+            </div>
+            <div className="ce-row">
+              <Field label="Arpeggio">
+                <Keys
+                  label="Arpeggio"
+                  value={arpMode}
+                  onChange={setArpMode}
+                  options={[
+                    { v: "off", label: SYM.block, aria: "Block chord", title: "Play each chord as a block" },
+                    { v: "rise", label: SYM.rise, aria: "Arpeggio, rising", title: "Arpeggio: one note at a time, low to high, spread across the chord's slot" },
+                    { v: "random", label: SYM.random, aria: "Arpeggio, random order", title: "Arpeggio in a new random order each time the chord plays" },
+                  ]}
+                />
+              </Field>
+              <Field label="Steps">
+                <Keys
+                  label="Arpeggio steps"
+                  value={arpFour}
+                  disabled={!arp}
+                  onChange={setArpFour}
+                  options={[
+                    { v: false, label: "n", title: "As many steps as the chord has notes" },
+                    { v: true, label: "-4-", title: "Four steps per chord: a three-note chord plays 1 3 5 3, so every chord keeps the same rhythm" },
+                  ]}
+                />
+              </Field>
+            </div>
+            {/* 80 bars for 60–140: one bar is one beat per minute */}
+            <Level
+              wide
+              label="Tempo"
+              n={80}
+              pos={(tempo - 60) / 80}
+              text={String(tempo)}
+              title="Beats per minute — each chord lasts two beats"
+              onPos={(p) => setTempo(Math.round(60 + p * 80))}
+              onStep={(d) => setTempo((t) => Math.min(140, Math.max(60, t + d)))}
+            />
+          </div>
+        </section>
+
+        <section className="ce-mod ce-m-out" aria-labelledby="ce-h-out">
+          <ModHead n="04" id="ce-h-out">Out</ModHead>
+          <div className="ce-stack">
+            <Field label="Route">
+              <Keys
+                label="Output"
+                value={routeMidi ? "midi" : "int"}
+                onChange={pickOutput}
+                options={[
+                  { v: "int", label: "Int", title: "The built-in synth" },
+                  {
+                    v: "midi",
+                    label: "MIDI",
+                    disabled: midiDead,
+                    title: midi.status === "ready"
+                      ? "Send notes to an external instrument instead of the built-in synth"
+                      : MIDI_STATUS[midi.status].hint,
+                  },
+                ]}
+              />
+            </Field>
+            <Field label="Port">
+              {midi.status !== "ready" ? (
+                <p className="ce-print" title={MIDI_STATUS[midi.status].hint}>
+                  {MIDI_STATUS[midi.status].label}
+                </p>
+              ) : midi.outputs.length ? (
+                <Keys
+                  column
+                  label="MIDI port"
+                  value={midi.portId}
+                  onChange={(id) => {
+                    midiPanic();
+                    midi.setPortId(id);
+                  }}
+                  options={midi.outputs.map((o, i) => ({ v: o.id, label: `${i + 1} · ${o.name}`, title: o.name }))}
+                />
+              ) : (
+                <p className="ce-print">No MIDI outputs found</p>
+              )}
+            </Field>
+          </div>
+        </section>
+
+        {/* the progression, on its e-ink panel, with the transport beside it */}
+        <section className="ce-mod ce-m-disp" aria-label="Progression">
+          <div className="ce-screen">
+            <div className="ce-scr-top">
+              <span><b>{keyName}</b> {mode}</span>
+              {prog.length > 0 && <span>{prog.length} bar{prog.length === 1 ? "" : "s"}</span>}
+              <span>{tempo} bpm</span>
+              {prog.length > 1 && (
+                <span title="Total semitones of voice movement across the progression — lower is smoother">
+                  Δ <b>{totalMotion}</b>
+                </span>
+              )}
+              {playing && playingIdx >= 0 && (
+                <span>bar <b>{playingIdx + 1}</b>/{prog.length}</span>
+              )}
+              {/* every progression this visit, oldest first; what's queued for
+                  when the loop comes round sits last, dashed */}
+              {(hist.gens.length > 1 || liveRef.current.next) && (
+                <ol className="ce-gens" ref={gensRef} aria-label="Progression history">
+                  {hist.gens.map((g, i) => {
+                    const waiting = queued?.kind === "goto" && queued.idx === i;
+                    return (
+                      <li key={i}>
+                        <button
+                          className={"ce-gen" + (i === hist.cur ? " on" : "") + (waiting ? " next" : "")}
+                          aria-current={i === hist.cur ? "true" : undefined}
+                          onClick={() => goto(i)}
+                          title={`${genNames(g)}\n` + (i === hist.cur
+                            ? playing && queued ? "Stay on this one: drop what's waiting" : "Playing now"
+                            : playing ? "Play this one when the loop comes round" : "Go back to this one")}
+                        >
+                          {i + 1}
+                        </button>
+                      </li>
+                    );
+                  })}
+                  {liveRef.current.next && queued.kind !== "goto" && (
+                    <li>
+                      <span
+                        className="ce-gen ghost"
+                        title={`${genNames(nextProg)}\n` + (queued.auto ? "Evolve: plays when the loop comes round" : "Plays when the loop comes round")}
+                      >
+                        +
+                      </span>
+                    </li>
+                  )}
+                </ol>
+              )}
+            </div>
+
+            {blocked && !noSoundDismissed && (
+              <div className="ce-nosound" role="status">
+                <p>
+                  <b>No sound?</b> Your browser is blocking audio on this page. In Safari:
+                  Safari menu → <i>Settings for {window.location.hostname}…</i> → Auto-Play →{" "}
+                  <i>Allow All Auto-Play</i>, then reload. In other browsers, look for a sound
+                  or autoplay permission under the icon at the left of the address bar.
+                </p>
+                <button
+                  className="ce-nosound-x"
+                  onClick={() => setNoSoundDismissed(true)}
+                  aria-label="Dismiss"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
+            <div className="ce-roll" ref={rollRef}>
+              {prog.length ? (
+                <PianoRoll
+                  prog={prog}
+                  voicings={voicings}
+                  bass={bass}
+                  playingIdx={playingIdx}
+                  lit={lit}
+                  keyRoot={key.root}
+                  spawn={spawn}
+                  colsRef={colsRef}
+                  dragIdx={dragIdx}
+                  dragMoved={dragMoved}
+                  onPlay={(i) => playVoiced(played[i])}
+                  onPlayNote={(m) => playVoiced({ upper: [m], bass: null })}
+                  onInvert={invert}
+                  onRemove={removeChord}
+                  onDragStart={onDragStart}
+                  onTileKey={onTileKey}
+                />
+              ) : (
+                <p className="ce-empty">Pick a chord below — it plays, and the roll starts here.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="ce-transport">
+            <span className="ce-lbl">Transport</span>
             <button
-              className="ce-nosound-x"
-              onClick={() => setNoSoundDismissed(true)}
-              aria-label="Dismiss"
-              title="Dismiss"
+              className={"ce-key big" + (playing ? " live" : "")}
+              onClick={() => { if (!playing) playAll(); }}
+              disabled={!prog.length}
+              aria-label="Play"
+              title={playing ? "Playing" : "Play the progression"}
             >
-              ×
+              {SYM.play}
+            </button>
+            <button className="ce-key big" onClick={stopPlayback} disabled={!playing} aria-label="Stop" title="Stop">
+              {SYM.stop}
+            </button>
+            <span className="ce-lbl">Delete</span>
+            <button
+              className="ce-key big"
+              onClick={undo}
+              disabled={!prog.length}
+              aria-label="Delete the last chord"
+              title="Delete the last chord"
+            >
+              {SYM.x}
+            </button>
+            <button
+              className="ce-key big word"
+              onClick={clear}
+              disabled={!prog.length}
+              aria-label="Delete every chord"
+              title="Delete every chord — the progression stays in the history"
+            >
+              All
             </button>
           </div>
-        )}
+        </section>
 
-        <div className="ce-stage">
-          <div className="ce-roll" ref={rollRef}>
-            {prog.length ? (
-              <PianoRoll
-                prog={prog}
-                voicings={voicings}
-                bass={bass}
-                playingIdx={playingIdx}
-                lit={lit}
-                keyRoot={key.root}
-                spawn={spawn}
-                colsRef={colsRef}
-                dragIdx={dragIdx}
-                dragMoved={dragMoved}
-                onPlay={(i) => playVoiced(played[i])}
-                onPlayNote={(m) => playVoiced({ upper: [m], bass: null })}
-                onInvert={invert}
-                onRemove={removeChord}
-                onDragStart={onDragStart}
-                onTileKey={onTileKey}
-              />
-            ) : (
-              <p className="ce-empty">
-                Pick a chord below — it plays, and the roll starts here.
-              </p>
-            )}
-          </div>
-
+        <section className="ce-mod ce-m-fut">
           <FutureList
             listRef={futuresRef}
             options={shown}
@@ -1522,18 +1562,193 @@ export default function ChordExplorer() {
             onPick={choose}
             onPreview={preview}
           />
-        </div>
-      </section>
+        </section>
 
-      <footer className="ce-legend">
-        {["home", "build", "tension", "outside"].map((h) => (
-          <span key={h} className="ce-leg">
-            <i style={{ background: HUE[h] }} />
-            {HUE_LABEL[h]}
-          </span>
+        <section className="ce-mod ce-m-snd" aria-labelledby="ce-h-snd">
+          <SoundModule
+            sound={sound}
+            setSound={setSound}
+            onAudition={auditionSound}
+            midiActive={midiActive}
+          />
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------
+//  PANEL PARTS — the few kinds of control the whole face is built from
+// ------------------------------------------------------------------------
+// A module's printed heading: its number, its name, a hairline to the edge.
+const ModHead = ({ n, id, children }) => (
+  <h2 className="ce-mod-h" id={id}>
+    <b>{n}</b>
+    {children}
+  </h2>
+);
+
+// a printed label over a control
+const Field = ({ label, title, children }) => (
+  <div className="ce-f" title={title}>
+    <span className="ce-lbl">{label}</span>
+    {children}
+  </div>
+);
+
+// A row of keys with cut-out legends, the chosen one lit from behind. This is
+// what every dropdown became: the choices are always in view.
+function Keys({ label, value, options, onChange, disabled, column }) {
+  return (
+    <div className={"ce-bg" + (column ? " col" : "")} role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button
+          key={String(o.v)}
+          role="radio"
+          aria-checked={value === o.v}
+          aria-label={o.aria}
+          className={value === o.v ? "on" : undefined}
+          disabled={disabled || o.disabled}
+          title={o.title}
+          onClick={() => onChange(o.v)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// a key that stays lit while it's on — sits in a .ce-bg, alone or with others
+const Toggle = ({ on, children, ...rest }) => (
+  <button className={on ? "on" : undefined} aria-pressed={on} {...rest}>
+    {children}
+  </button>
+);
+
+// The key selector, laid out as the octave it is: naturals along the bottom,
+// the sharps and flats above them, half a key over.
+const NATURALS = [0, 2, 4, 5, 7, 9, 11];
+function RootKeys({ root, onPick }) {
+  return (
+    <div className="ce-keys" role="radiogroup" aria-label="Key">
+      {Array.from({ length: 12 }, (_, pc) => {
+        const n = NATURALS.indexOf(pc);
+        const acc = n < 0;
+        const col = acc ? NATURALS.indexOf(pc - 1) * 2 + 2 : n * 2 + 1;
+        return (
+          <button
+            key={pc}
+            role="radio"
+            aria-checked={root === pc}
+            className={(acc ? "acc" : "") + (root === pc ? " on" : "")}
+            style={{ gridRow: acc ? 1 : 2, gridColumn: `${col} / span 2` }}
+            onClick={() => onPick(pc)}
+          >
+            {nameOf(pc, pc)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Mutate's amount: four lines, lit up to the one you press
+function Steps({ value, onChange }) {
+  return (
+    <div className="ce-steps-wrap">
+      <div className="ce-steps" role="radiogroup" aria-label="How much a mutation changes">
+        {MUT_LEVELS.map(([label, hint], i) => (
+          <button
+            key={label}
+            role="radio"
+            aria-checked={value === i + 1}
+            aria-label={label}
+            title={`Change ${hint} — Evolve uses this too`}
+            className={i < value ? "lit" : undefined}
+            onClick={() => onChange(i + 1)}
+          />
         ))}
-        <span className="ce-leg-note">Colour shows what a chord does to the harmony.</span>
-      </footer>
+      </div>
+      <span className="ce-steps-val">{MUT_LEVELS[value - 1][0]}</span>
+    </div>
+  );
+}
+
+// A level: a row of thin bars lit from behind up to the value, the rest dark.
+// It stands in for a range input, so it carries the slider role and its keys —
+// arrows step, Shift+arrows step ten times as far, Home and End go to the ends.
+// `pos` is 0–1; the caller maps it onto whatever the level controls. `onStep`,
+// if given, owns the arrow keys (tempo steps a whole BPM); otherwise they move
+// a hundredth of the travel. Dragging is driven from the window, the same
+// lesson as the roll's reordering: release anywhere and it still lets go.
+function Level({ label, pos, text, onPos, onStep, onCommit, n = 36, wide, title }) {
+  const bar = useRef(null);
+  const clamp = (t) => Math.min(1, Math.max(0, t));
+  const lit = Math.round(clamp(pos) * n);
+  const fromX = (x) => {
+    const r = bar.current.getBoundingClientRect();
+    return clamp((x - r.left) / r.width);
+  };
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); // no text selection; focus by hand instead
+    bar.current.focus();
+    onPos(fromX(e.clientX));
+    function move(m) {
+      if (!m.buttons) return up();
+      onPos(fromX(m.clientX));
+    }
+    function up() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      onCommit?.();
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+  const STEP_KEYS = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 };
+  const onKeyDown = (e) => {
+    if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      return onPos(e.key === "Home" ? 0 : 1);
+    }
+    const d = STEP_KEYS[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const by = d * (e.shiftKey ? 10 : 1);
+    if (onStep) onStep(by);
+    else onPos(clamp(pos + by / 100));
+  };
+  const onKeyUp = (e) => {
+    if (e.key in STEP_KEYS || e.key === "Home" || e.key === "End") onCommit?.();
+  };
+  return (
+    <div className={"ce-lvl" + (wide ? " wide" : "")} title={title}>
+      <div className="ce-lvl-top">
+        <span className="ce-lbl">{label}</span>
+        <span className="ce-lvl-val">{text}</span>
+      </div>
+      <div
+        ref={bar}
+        className="ce-lvl-bar"
+        role="slider"
+        tabIndex={0}
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(clamp(pos) * 100)}
+        aria-valuetext={text}
+        onPointerDown={onPointerDown}
+        onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+      >
+        {Array.from({ length: n }, (_, i) => (
+          <i key={i} className={i < lit ? "lit" : undefined} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1542,103 +1757,84 @@ export default function ChordExplorer() {
 //  SOUND — the synth, with the lid off
 // ------------------------------------------------------------------------
 // One control per parameter, read straight off SYNTH_PARAMS, so adding a knob
-// is a line in the table rather than a line of markup. Every slider runs
-// 0–1000 whatever it controls (see paramToPos) — which is meaningless to read
-// aloud, hence aria-valuetext carrying the formatted value instead.
+// is a line in the table rather than a line of markup. Every level runs 0–1000
+// underneath whatever it controls (see paramToPos) — meaningless to read aloud,
+// hence aria-valuetext carrying the formatted value instead.
 function Knob({ k, value, onChange, onCommit }) {
   const p = SYNTH_PARAMS[k];
   if (p.kind === "enum") {
     return (
-      <label className="ce-knob ce-knob-enum" title={p.hint}>
-        <span className="ce-knob-top"><em>{p.label}</em></span>
-        <select value={value} onChange={(e) => onChange(e.target.value)}>
-          {p.options.map((o) => (
-            <option key={o} value={o}>{o}</option>
-          ))}
-        </select>
-      </label>
+      <Field label={p.label} title={p.hint}>
+        <Keys
+          label={p.label}
+          value={value}
+          onChange={onChange}
+          options={p.options.map((o) => ({ v: o, label: WAVE_SYM[o] ?? o, aria: o, title: o }))}
+        />
+      </Field>
     );
   }
   return (
-    <label className="ce-knob" title={p.hint}>
-      <span className="ce-knob-top">
-        <em>{p.label}</em>
-        <b>{formatParam(k, value)}</b>
-      </span>
-      <input
-        type="range" min="0" max="1000" step="1"
-        value={paramToPos(k, value)}
-        aria-label={p.label}
-        aria-valuetext={formatParam(k, value)}
-        onChange={(e) => onChange(paramFromPos(k, Number(e.target.value)))}
-        // audition on release, not on every frame of the drag
-        onPointerUp={onCommit}
-        onKeyUp={onCommit}
-      />
-    </label>
+    <Level
+      label={p.label}
+      title={p.hint}
+      pos={paramToPos(k, value) / 1000}
+      text={formatParam(k, value)}
+      onPos={(t) => onChange(paramFromPos(k, Math.round(t * 1000)))}
+      // audition on release, not on every frame of the drag
+      onCommit={onCommit}
+    />
   );
 }
 
-// A concertina rather than a popover or a separate page: the sound is part of
-// the same instrument as the key and the tempo, and opening it should push the
-// page down rather than float over the progression you're listening to. The
-// 0fr→1fr grid transition is what makes that animate without a measured height.
-function SoundPanel({ open, sound, setSound, onAudition, midiActive }) {
+// Module 06, always open at the foot of the face: the sound is part of the
+// same instrument as the key and the tempo. Presets are keys like everything
+// else, and the last one, —, lights when the levels match none of them.
+function SoundModule({ sound, setSound, onAudition, midiActive }) {
   const preset = presetNameFor(sound);
   const set = (k) => (v) => setSound((s) => ({ ...s, [k]: v }));
   return (
-    <div className={"ce-sound" + (open ? " open" : "")} id="ce-sound-panel">
-      <div className="ce-sound-clip">
-        {/* inert, not just hidden: a collapsed panel shouldn't collect tab stops */}
-        <div className="ce-sound-inner" inert={!open}>
-          <div className="ce-sound-head">
-            <label className="ce-field">
-              <span>Preset</span>
-              <select
-                value={preset ?? "custom"}
-                title="A starting point — every slider below is still yours afterwards"
-                onChange={(e) => setSound({ ...PRESETS[e.target.value] })}
-              >
-                {Object.keys(PRESETS).map((name) => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-                {/* only offered as a readout of where you are; picking it is a no-op */}
-                {!preset && <option value="custom" disabled>Custom</option>}
-              </select>
-            </label>
-            <p className="ce-sound-note">
-              {midiActive
-                ? "Routed to MIDI — Dynamics and Humanise still go out the port; the rest shapes the built-in synth."
-                : "Shapes the built-in synth. Drag a slider and release it to hear the chord you're on."}
-            </p>
-          </div>
-
-          <div className="ce-sound-grid">
-            {SYNTH_GROUPS.map((g) => (
-              <div className="ce-sgroup" key={g.name}>
-                <h4 className="ce-eyebrow">{g.name}</h4>
-                {g.keys.map((k) => (
-                  <Knob
-                    key={k}
-                    k={k}
-                    value={sound[k]}
-                    onChange={set(k)}
-                    onCommit={onAudition}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
+    <>
+      <ModHead n="06" id="ce-h-snd">Sound</ModHead>
+      <div className="ce-snd-top">
+        <Field label="Preset" title="A starting point — every level below is still yours afterwards">
+          <Keys
+            label="Preset"
+            value={preset ?? "custom"}
+            onChange={(name) => { if (name !== "custom") setSound({ ...PRESETS[name] }); }}
+            options={[
+              ...Object.keys(PRESETS).map((name) => ({ v: name, label: name })),
+              { v: "custom", label: "—", aria: "Custom", title: "Custom: the levels match none of the presets" },
+            ]}
+          />
+        </Field>
+        <p className="ce-print ce-snd-note">
+          {midiActive
+            ? "Routed to MIDI — Dynamics and Humanise still go out the port; the rest shapes the built-in synth."
+            : "Drag a level and let go to hear the chord you're on."}
+        </p>
       </div>
-    </div>
+      <div className="ce-snd-cols">
+        {SYNTH_GROUPS.map((g) => (
+          <div className="ce-snd-col" key={g.name}>
+            <h3 className="ce-snd-h">{g.name}</h3>
+            <div className="ce-stack">
+              {g.keys.map((k) => (
+                <Knob key={k} k={k} value={sound[k]} onChange={set(k)} onCommit={onAudition} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
 // ------------------------------------------------------------------------
-//  FUTURES — every chord that could come next, one line each, most tense first
+//  FUTURES — every chord that could come next, one line each
 // ------------------------------------------------------------------------
 const MAX_TENSION = 4.5; // the top of the tension meter, matching the engine's range
+const METER = 8; // squares in a tension meter
 
 function FutureList({
   options, total, current, keyRoot, fromMidi, voiceLead, exiting, listKey, listRef,
@@ -1655,37 +1851,40 @@ function FutureList({
   };
   return (
     <div className="ce-futures">
-      <div className="ce-futures-head">
-        <span className="ce-eyebrow">
-          {current ? `Where to next from ${current.name}?` : "Start on any chord"}
-        </span>
-        <span className="ce-futures-tools">
+      <div className="ce-fut-head">
+        <ModHead n="05">{current ? `From ${current.name} — next` : "Start on any chord"}</ModHead>
+        <label className="ce-filter">
+          <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.1">
+            <circle cx="5" cy="5" r="3.8" />
+            <path d="M8 8l3 3" />
+          </svg>
           <input
-            className="ce-filter"
             type="search"
             value={query}
-            placeholder="Filter…"
+            placeholder="filter — bvii, f#, sus"
             aria-label="Filter the chords by name or roman numeral"
             title="Filter by name or roman numeral — “sus”, “♭VII”, “F♯”. Enter picks the top match."
             onChange={(e) => onQuery(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          {filtering && (
-            <span className="ce-futures-count">{options.length}/{total}</span>
-          )}
-          <button
-            type="button"
-            className="ce-futures-axis"
-            onClick={onFlipSort}
-            aria-label={`Sorted by tension, ${tensionDesc ? "most tense first" : "least tense first"}. Flip the order.`}
-            title={
-              (tensionDesc ? "Most tense first" : "Least tense first") +
-              " — click to flip the order"
-            }
-          >
-            tension {tensionDesc ? "↓" : "↑"}
-          </button>
-        </span>
+          {filtering && <span className="ce-futures-count">{options.length}/{total}</span>}
+        </label>
+      </div>
+      <div className="ce-future head">
+        <button
+          type="button"
+          className="ce-futures-axis"
+          onClick={onFlipSort}
+          aria-label={`Sorted by tension, ${tensionDesc ? "most tense first" : "least tense first"}. Flip the order.`}
+          title={(tensionDesc ? "Most tense first" : "Least tense first") + " — click to flip the order"}
+        >
+          Tension {tensionDesc ? "↓" : "↑"}
+        </button>
+        <span>Chord</span>
+        <span className="ce-fu-roman">Degree</span>
+        <span className="ce-fu-notes">Notes</span>
+        <span className="ce-fu-dist">Δ</span>
+        <span className="ce-fu-move">What it does</span>
       </div>
       {/* keyed on the whole option set so the assemble animation replays */}
       <div className="ce-futures-list" key={listKey} ref={listRef}>
@@ -1704,9 +1903,7 @@ function FutureList({
       </div>
       {filtering && (!options.length || hiddenBy.length > 0) && (
         <p className="ce-futures-note" role="status">
-          {!options.length && (
-            <span>Nothing here matches “{query.trim()}”.</span>
-          )}
+          {!options.length && <span>Nothing here matches “{query.trim()}”.</span>}
           {hiddenBy.map((g) => (
             <button key={g.label} type="button" className="ce-futures-hint" onClick={g.turnOn}>
               +{g.hits.length} more with {g.label} on
@@ -1721,67 +1918,73 @@ function FutureList({
 function FutureRow({ opt, i, keyRoot, dist, state, onPick, onPreview }) {
   const ref = useRef(null);
   const notes = chordNoteNames(opt, keyRoot).join(" ");
+  // at least one square, so the calmest chord still reads as a meter
+  const lit = Math.max(1, Math.round((Math.min(opt.tension, MAX_TENSION) / MAX_TENSION) * METER));
   return (
     <button
       ref={ref}
       type="button"
-      className={
-        "ce-future" + (opt.resolution ? " resolve" : "") + (state ? " " + state : "")
-      }
-      style={{ "--c": HUE[hueOf(opt.func)], "--i": i, "--t": opt.tension / MAX_TENSION }}
+      className={"ce-future" + (opt.resolution ? " resolve" : "") + (state ? " " + state : "")}
+      style={{ "--i": i }}
       onClick={() => onPick(opt, ref.current)}
       title={
-        `${opt.name} — ${notes}` +
+        `${opt.name} — ${notes} · ${opt.func}` +
         (opt.motion ? ` · root ${opt.motion}` : "") +
         `\n${opt.move}`
       }
     >
-      <span className="ce-fu-tension" aria-hidden="true"><i /></span>
+      {/* what the chord does and how hard it pulls, in one block: the function
+          printed small over a meter of squares lit to its tension */}
+      <span className="ce-fu-tension" aria-hidden="true">
+        <span className="ce-fu-func">{opt.func}</span>
+        <span className="ce-fu-meter">
+          {Array.from({ length: METER }, (_, j) => (
+            <i key={j} className={j < lit ? "lit" : undefined} />
+          ))}
+        </span>
+      </span>
       {/* hovering auditions the chord — the name alone, so reading a row is silent */}
       <span className="ce-fu-name" onMouseEnter={() => onPreview(opt)}>{opt.name}</span>
       <span className="ce-fu-roman">{opt.roman}</span>
       <span className="ce-fu-notes">{notes}</span>
       <span className="ce-fu-dist">
         {dist != null && (
-          <span
-            className={"ce-chip-dist" + (dist <= 2 ? " smooth" : dist >= 7 ? " far" : "")}
-            title={`${dist} semitone${dist === 1 ? "" : "s"} of voice movement from the current chord`}
-          >
+          <span title={`${dist} semitone${dist === 1 ? "" : "s"} of voice movement from the current chord`}>
             Δ{dist}
           </span>
         )}
       </span>
-      <span className="ce-fu-move">{opt.move}</span>
+      <span className="ce-fu-move">
+        {opt.move}
+        {opt.resolution && <span className="ce-fu-res">Resolves</span>}
+      </span>
     </button>
   );
 }
-
 // piano-roll progression: each voice sits at its pitch height, so common tones
-// line up across columns and the voice leading is visible. Faint connectors trace
-// each voice from one chord to the next; the chord tile sits underneath.
-const ROLL = { ROW: 11, CELL: 18, COL: 84, GAP: 10, LANE: 16 }; // px per semitone, pill, column, gap, gap above the bass lane
+// line up across columns and the voice leading is visible. Right-angled ink
+// connectors trace each voice from one chord to the next — the way a panel
+// draws — and the chord tile sits underneath.
+const ROLL = { ROW: 13, CELL: 26, COL: 128, GAP: 44, LANE: 36 }; // px per semitone, pill, column, gap, gap above the bass lane
 
 // semitone step as a sequencer would read it: +2, -3, 0 for a held voice
-const signed = (n) => (n > 0 ? `+${n}` : `${n}`);
+const signed = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : "·");
 const stepTitle = (n) =>
   n === 0
     ? "this voice holds"
-    : `this voice moves ${signed(n)} semitone${Math.abs(n) === 1 ? "" : "s"}`;
+    : `this voice moves ${n > 0 ? "+" : "−"}${Math.abs(n)} semitone${Math.abs(n) === 1 ? "" : "s"}`;
+const octaveOf = (m) => Math.floor(m / 12) - 1; // C4 is 60
 
 const ShareIcon = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"
-       fill="none" stroke="currentColor" strokeWidth="1.5"
-       strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="3.6" r="2.1" />
-    <circle cx="4" cy="8" r="2.1" />
-    <circle cx="12" cy="12.4" r="2.1" />
-    <path d="M5.9 6.9 L10.1 4.7 M5.9 9.1 L10.1 11.3" />
+  <svg viewBox="0 0 14 14" aria-hidden="true" focusable="false"
+       fill="none" stroke="currentColor" strokeWidth="1.2">
+    <path d="M7 1v8M3.5 4.5 7 1l3.5 3.5M2 8v4.5h10V8" />
   </svg>
 );
 
 const Tick = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"
-       fill="none" stroke="currentColor" strokeWidth="1.9"
+  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"
+       fill="none" stroke="currentColor" strokeWidth="1.6"
        strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 8.4 L6.4 11.8 L13 5.2" />
   </svg>
@@ -1800,20 +2003,41 @@ const Chevron = ({ up }) => (
   </svg>
 );
 
-// a generation as a strip of chord names, each underlined in its function's
-// colour; against another progression, the bars that differ are marked
-function GenNames({ prog, against }) {
-  if (!prog.length) return <span className="ce-gen-empty">empty</span>;
-  return prog.map((c, i) => (
-    <span
-      key={i}
-      className={"ce-gen-chord" + (against && against[i]?.name !== c.name ? " changed" : "")}
-      style={{ "--c": HUE[hueOf(c.func)] }}
-    >
-      {c.name}
-    </span>
-  ));
-}
+// The legends: small line drawings in place of words, where a word would be
+// longer than the thing it names. Cryptic on purpose — each key has a tooltip.
+const Sym = ({ box = "0 0 22 12", children }) => (
+  <svg viewBox={box} aria-hidden="true" focusable="false"
+       fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+const Dot = ({ x, y }) => <circle cx={x} cy={y} r="1.4" fill="currentColor" stroke="none" />;
+const WAVE_SYM = {
+  sine: <Sym><path d="M1 6C3.8-1.5 8.2-1.5 11 6S18.2 13.5 21 6" /></Sym>,
+  triangle: <Sym><path d="M1 10L6 2L11 10L16 2L21 10" /></Sym>,
+  sawtooth: <Sym><path d="M1 10L10 2V10L19 2V10" /></Sym>,
+  square: <Sym><path d="M1 10V2H6V10H11V2H16V10H21" /></Sym>,
+};
+const SYM = {
+  // voicing: three stacked lines jumping between chords, or stepping smoothly
+  rootPos: <Sym><path d="M1 10h5M1 6h5M1 2h5M16 11h5M16 7h5M16 3h5" /></Sym>,
+  voiceLed: <Sym><path d="M1 10h20M1 6h9l2 1h9M1 2h9l2 -1h9" /></Sym>,
+  // arpeggio: the chord's notes as dots in time — together, rising, scattered
+  block: <Sym><Dot x={11} y={2} /><Dot x={11} y={6} /><Dot x={11} y={10} /></Sym>,
+  rise: <Sym><Dot x={3} y={10} /><Dot x={11} y={6} /><Dot x={19} y={2} /></Sym>,
+  random: <Sym><Dot x={3} y={6} /><Dot x={11} y={10} /><Dot x={19} y={2} /></Sym>,
+  // hold bass: an arpeggio over a line that doesn't stop
+  hold: <Sym><path d="M1 11h20" /><Dot x={5} y={6} /><Dot x={11} y={3} /><Dot x={17} y={6} /></Sym>,
+  loop: <Sym><path d="M7 2h8a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8z" /><path d="M13 0l2 2-2 2" /></Sym>,
+  suggest: <Sym box="0 0 12 12"><path d="M1 9h2l3-6h2l3 6" /></Sym>,
+  mutate: <Sym box="0 0 12 12"><path d="M2 3h5l-2-2M10 9H5l2 2" /></Sym>,
+  play: <Sym box="0 0 14 14"><path d="M3 1.5v11L12 7z" fill="currentColor" stroke="none" /></Sym>,
+  stop: <Sym box="0 0 14 14"><rect x="2.5" y="2.5" width="9" height="9" fill="currentColor" stroke="none" /></Sym>,
+  x: <Sym box="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" /></Sym>,
+};
+
+// what the lights burn — one picked at random on each visit
+const LAMPS = ["#FF5F1F", "#ED67B4", "#58B4B9", "#FFB000", "#2FD37A", "#FF2E3F", "#2E8BFF"];
 
 function PianoRoll({
   prog, voicings, bass, playingIdx, lit, keyRoot, spawn, colsRef, dragIdx, dragMoved,
@@ -1827,7 +2051,6 @@ function PianoRoll({
   const bandH = (max - min) * ROW + CELL;
   const width = prog.length * COL + Math.max(0, prog.length - 1) * GAP;
   const topOf = (m) => (max - m) * ROW; // pill top
-  const cx = (i) => i * (COL + GAP) + COL / 2; // column centre
   const cy = (m) => topOf(m) + CELL / 2; // pill centre
 
   // The bass voice gets its own lane under the chords rather than its true
@@ -1841,191 +2064,169 @@ function PianoRoll({
   const bassTop = (m) => laneTop + (bMax - m) * ROW;
   const rollH = hasBass ? laneTop + (bMax - bMin) * ROW + CELL : bandH;
 
-  // connectors: pair voices by ascending pitch order across adjacent chords
+  // connectors: pair voices by ascending pitch order across adjacent chords,
+  // from the right edge of one pill to the left edge of the next — along, down
+  // (or up) at the midpoint, along again
   const links = [];
+  const link = (i, y1, y2) => {
+    const x1 = i * (COL + GAP) + COL;
+    const x2 = (i + 1) * (COL + GAP);
+    const mid = (x1 + x2) / 2;
+    links.push(y1 === y2 ? `M${x1} ${y1}H${x2}` : `M${x1} ${y1}H${mid}V${y2}H${x2}`);
+  };
   for (let i = 0; i < voicings.length - 1; i++) {
     const a = [...voicings[i]].sort((p, q) => p - q);
     const b = [...voicings[i + 1]].sort((p, q) => p - q);
-    for (let v = 0; v < Math.min(a.length, b.length); v++) {
-      links.push({
-        x1: cx(i), y1: cy(a[v]), x2: cx(i + 1), y2: cy(b[v]), held: a[v] === b[v],
-      });
-    }
-    if (hasBass) {
-      links.push({
-        x1: cx(i), y1: bassTop(bass[i]) + CELL / 2,
-        x2: cx(i + 1), y2: bassTop(bass[i + 1]) + CELL / 2,
-        held: bass[i] === bass[i + 1],
-      });
-    }
+    for (let v = 0; v < Math.min(a.length, b.length); v++) link(i, cy(a[v]), cy(b[v]));
+    if (hasBass) link(i, bassTop(bass[i]) + CELL / 2, bassTop(bass[i + 1]) + CELL / 2);
   }
 
   return (
-    <div className="ce-roll-scroll">
-      <div className="ce-roll-inner" style={{ width }}>
-        <svg className="ce-roll-links" width={width} height={rollH} aria-hidden="true">
-          {hasBass && (
-            <line
-              className="ce-roll-lane"
-              x1={0} x2={width} y1={bandH + ROLL.LANE / 2} y2={bandH + ROLL.LANE / 2}
-            />
-          )}
-          {links.map((l, k) => (
-            <line
-              key={k}
-              x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
-              className={"ce-roll-link" + (l.held ? " held" : "")}
-            />
-          ))}
-        </svg>
-        <div className="ce-roll-cols" ref={colsRef}>
-          {prog.map((c, i) => {
-            const midi = voicings[i];
-            // the column that just landed: its pills fly in from the future row
-            const born = spawn && spawn.idx === i;
-            const prevSet = i > 0 ? new Set(voicings[i - 1]) : null;
-            const rootName = nameOf(c.rootPc, keyRoot);
-            // the slash names the lowest note you hear: the bass voice when it's on
-            // (the root, unless the arrows have walked it to another chord tone),
-            // otherwise the bottom of the voicing
-            const bassName = hasBass ? nameOf(mod12(bass[i]), keyRoot) : bassNameOf(midi, keyRoot);
-            const inverted = bassName !== rootName;
-            const notes = chordNoteNames(c, keyRoot);
-            // semitone travel from the previous chord (the connectors' total length)
-            const dist = i > 0 ? voicingDistance(voicings[i - 1], midi) : null;
-            // per-voice steps, for dialling the move into a chromatic sequencer
-            const steps = i > 0 ? voiceSteps(voicings[i - 1], midi) : null;
-            return (
-              <div
-                key={c.id}
-                className={
-                  "ce-roll-col" +
-                  (i === playingIdx ? " playing" : "") +
-                  (i === dragIdx ? " dragging" : "")
-                }
-                style={{ "--c": HUE[hueOf(c.func)], width: COL }}
-              >
-                <span className="ce-roll-notes" style={{ height: rollH }}>
-                  {[...midi].sort((a, b) => a - b).map((m, v) => {
-                    const step = steps ? steps.get(m) : undefined;
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        className={
-                          "ce-roll-note" +
-                          (prevSet && prevSet.has(m) ? " held" : "") +
-                          (i === playingIdx && lit.has(m) ? " lit" : "") +
-                          (born ? " spawn" : "")
-                        }
-                        // --dx / --dy are measured after layout, in the parent
-                        style={{
-                          top: topOf(m),
-                          // the bass lands first, so the chord builds upward
-                          ...(born ? { animationDelay: `${(v + (hasBass ? 1 : 0)) * 52}ms` } : null),
-                        }}
-                        onClick={() => onPlayNote(m)}
-                        title={
-                          `Play ${Tone.Frequency(m, "midi").toNote()}` +
-                          (step == null ? "" : ` · ${stepTitle(step)}`)
-                        }
-                      >
-                        {nameOf(mod12(m), keyRoot)}
-                        {step != null && <span className="ce-roll-step">{signed(step)}</span>}
-                      </button>
-                    );
+    <div className="ce-roll-inner" style={{ width }}>
+      <svg className="ce-roll-links" width={width} height={rollH} aria-hidden="true">
+        {hasBass && (
+          <line
+            className="ce-roll-lane"
+            x1={0} x2={width} y1={bandH + ROLL.LANE / 2} y2={bandH + ROLL.LANE / 2}
+          />
+        )}
+        {links.map((d, k) => <path key={k} d={d} className="ce-roll-link" />)}
+      </svg>
+      <div className="ce-roll-cols" ref={colsRef}>
+        {prog.map((c, i) => {
+          const midi = voicings[i];
+          // the column that just landed: its pills fly in from the future row
+          const born = spawn && spawn.idx === i;
+          const prevSet = i > 0 ? new Set(voicings[i - 1]) : null;
+          const rootName = nameOf(c.rootPc, keyRoot);
+          // the slash names the lowest note you hear: the bass voice when it's on
+          // (the root, unless the arrows have walked it to another chord tone),
+          // otherwise the bottom of the voicing
+          const bassName = hasBass ? nameOf(mod12(bass[i]), keyRoot) : bassNameOf(midi, keyRoot);
+          const inverted = bassName !== rootName;
+          const notes = chordNoteNames(c, keyRoot);
+          // semitone travel from the previous chord (the connectors' total length)
+          const dist = i > 0 ? voicingDistance(voicings[i - 1], midi) : null;
+          // per-voice steps, for dialling the move into a chromatic sequencer
+          const steps = i > 0 ? voiceSteps(voicings[i - 1], midi) : null;
+          const pill = (m, { step, held, isBass, delay }) => (
+            <button
+              key={isBass ? "bass" : m}
+              type="button"
+              className={
+                "ce-roll-note" +
+                (isBass ? " bass" : "") +
+                (held ? " held" : "") +
+                (i === playingIdx && lit.has(m) ? " lit" : "") +
+                (born ? " spawn" : "")
+              }
+              // --dx / --dy are measured after layout, in the parent
+              style={{
+                top: isBass ? bassTop(m) : topOf(m),
+                ...(born ? { animationDelay: `${delay}ms` } : null),
+              }}
+              onClick={() => onPlayNote(m)}
+              title={
+                `Play ${Tone.Frequency(m, "midi").toNote()}` +
+                (isBass ? " · bass" : "") +
+                (step == null ? "" : ` · ${stepTitle(step)}`)
+              }
+            >
+              <span>{nameOf(mod12(m), keyRoot)}{octaveOf(m)}</span>
+              {step != null && <em className="ce-roll-step">{signed(step)}</em>}
+            </button>
+          );
+          return (
+            <div
+              key={c.id}
+              className={
+                "ce-roll-col" +
+                (i === playingIdx ? " playing" : "") +
+                (i === dragIdx ? " dragging" : "")
+              }
+              style={{ width: COL }}
+            >
+              <span className="ce-roll-notes" style={{ height: rollH }}>
+                {[...midi].sort((a, b) => a - b).map((m, v) =>
+                  pill(m, {
+                    step: steps ? steps.get(m) : undefined,
+                    held: prevSet && prevSet.has(m),
+                    // the bass lands first, so the chord builds upward
+                    delay: (v + (hasBass ? 1 : 0)) * 52,
+                  })
+                )}
+                {hasBass &&
+                  pill(bass[i], {
+                    step: i > 0 ? bass[i] - bass[i - 1] : null,
+                    held: i > 0 && bass[i - 1] === bass[i],
+                    isBass: true,
+                    delay: 0,
                   })}
-                  {hasBass && (() => {
-                    const m = bass[i];
-                    const step = i > 0 ? m - bass[i - 1] : null;
-                    return (
-                      <button
-                        type="button"
-                        className={
-                          "ce-roll-note bass" +
-                          (i > 0 && bass[i - 1] === m ? " held" : "") +
-                          (i === playingIdx && lit.has(m) ? " lit" : "") +
-                          (born ? " spawn" : "")
-                        }
-                        style={{ top: bassTop(m) }}
-                        onClick={() => onPlayNote(m)}
-                        title={
-                          `Play ${Tone.Frequency(m, "midi").toNote()} · bass` +
-                          (step == null ? "" : ` · ${stepTitle(step)}`)
-                        }
-                      >
-                        {nameOf(mod12(m), keyRoot)}
-                        {step != null && <span className="ce-roll-step">{signed(step)}</span>}
-                      </button>
-                    );
-                  })()}
-                </span>
-                <div className={"ce-roll-tilewrap" + (born ? " spawn" : "")}>
-                  <button
-                    type="button"
-                    className="ce-roll-tile"
-                    onPointerDown={(e) => onDragStart(i, e)}
-                    onClick={() => { if (!dragMoved()) onPlay(i); }}
-                    onKeyDown={(e) => onTileKey(i, e)}
-                    aria-label={`${c.name}, chord ${i + 1} of ${prog.length}. Alt with the arrow keys reorders, Delete removes.`}
-                    title={`${c.name}${inverted ? "/" + bassName : ""} · ${notes.join(" ")} · ${c.move}\nDrag to reorder · Alt+← / Alt+→ · Delete to remove`}
-                  >
-                    <span className="ce-chip-name">
-                      {c.name}
-                      {inverted && <span className="ce-chip-slash">/{bassName}</span>}
-                    </span>
-                    <span className="ce-chip-roman">{c.roman}</span>
-                    {/* the first chord has nothing to measure from — hold the slot
-                        open with a ghost so every tile is the same height */}
-                    {dist != null ? (
+              </span>
+              <div className={"ce-roll-tilewrap" + (born ? " spawn" : "")}>
+                <button
+                  type="button"
+                  className="ce-roll-tile"
+                  onPointerDown={(e) => onDragStart(i, e)}
+                  onClick={() => { if (!dragMoved()) onPlay(i); }}
+                  onKeyDown={(e) => onTileKey(i, e)}
+                  aria-label={`${c.name}, chord ${i + 1} of ${prog.length}. Alt with the arrow keys reorders, Delete removes.`}
+                  title={`${c.name}${inverted ? "/" + bassName : ""} · ${notes.join(" ")} · ${c.move}\nDrag to reorder · Alt+← / Alt+→ · Delete to remove`}
+                >
+                  <span className="ce-chip-name">
+                    {c.name}
+                    {inverted && <span className="ce-chip-slash">/{bassName}</span>}
+                  </span>
+                  <span className="ce-chip-roman">
+                    {c.roman}
+                    {/* the first chord has nothing to measure from */}
+                    {dist != null && (
                       <span
-                        className={"ce-chip-dist" + (dist <= 2 ? " smooth" : dist >= 7 ? " far" : "")}
+                        className="ce-chip-dist"
                         title={`${dist} semitone${dist === 1 ? "" : "s"} of voice movement from the previous chord`}
                       >
                         Δ{dist}
                       </span>
-                    ) : (
-                      <span className="ce-chip-dist ce-chip-ghost" aria-hidden="true">Δ0</span>
                     )}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="ce-roll-del"
+                  onClick={() => onRemove(i)}
+                  aria-label={`Remove ${c.name} from the progression`}
+                  title={`Remove ${c.name}`}
+                >
+                  ×
+                </button>
+                <span className="ce-roll-invert">
+                  <button
+                    type="button"
+                    className="ce-inv-btn"
+                    onClick={() => onInvert(i, +1)}
+                    aria-label={hasBass ? "Move the bass up a chord tone" : "Raise the lowest note an octave"}
+                    title={hasBass
+                      ? "Move the bass up a chord tone, and raise the lowest upper note an octave"
+                      : "Raise the lowest note an octave"}
+                  >
+                    <Chevron up />
                   </button>
                   <button
                     type="button"
-                    className="ce-roll-del"
-                    onClick={() => onRemove(i)}
-                    aria-label={`Remove ${c.name} from the progression`}
-                    title={`Remove ${c.name}`}
+                    className="ce-inv-btn"
+                    onClick={() => onInvert(i, -1)}
+                    aria-label={hasBass ? "Move the bass down a chord tone" : "Lower the highest note an octave"}
+                    title={hasBass
+                      ? "Move the bass down a chord tone, and lower the highest upper note an octave"
+                      : "Lower the highest note an octave"}
                   >
-                    ×
+                    <Chevron />
                   </button>
-                  <span className="ce-roll-invert">
-                    <button
-                      type="button"
-                      className="ce-inv-btn"
-                      onClick={() => onInvert(i, +1)}
-                      aria-label={hasBass ? "Move the bass up a chord tone" : "Raise the lowest note an octave"}
-                      title={hasBass
-                        ? "Move the bass up a chord tone, and raise the lowest upper note an octave"
-                        : "Raise the lowest note an octave"}
-                    >
-                      <Chevron up />
-                    </button>
-                    <button
-                      type="button"
-                      className="ce-inv-btn"
-                      onClick={() => onInvert(i, -1)}
-                      aria-label={hasBass ? "Move the bass down a chord tone" : "Lower the highest note an octave"}
-                      title={hasBass
-                        ? "Move the bass down a chord tone, and lower the highest upper note an octave"
-                        : "Lower the highest note an octave"}
-                    >
-                      <Chevron />
-                    </button>
-                  </span>
-                </div>
+                </span>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2061,378 +2262,352 @@ function TensionCurve({ prog, playingIdx }) {
 }
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600&display=swap');
 
+/* A piece of hardware: one white chassis, modules set into it with hairline
+   seams, lit keys instead of dropdowns, levels lit from behind, and a mono
+   e-ink panel for the progression. One lamp colour for every light on it. */
+body{margin:0; background:#F3F3F0;}
 .ce-root{
-  --bg:#E7E1D4; --panel:#F3EEE4; --ink:#221E18; --muted:#6E665A;
-  --line:rgba(34,30,24,.12); --line2:rgba(34,30,24,.07);
+  --page:#F3F3F0; --face:#FCFCFA; --seam:#E3E3DE; --hi:#FFFFFF;
+  --ink:#1C1C1A; --print:#8A8A84; --print2:#B4B4AE; --unlit:#D9D9D3; --key:#FAFAF8;
+  --lamp:#FF5F1F; --lamp-glow:color-mix(in srgb, var(--lamp) 50%, transparent);
+  --paper:#F7F6F3; --paper-ink:#1E1E1C; --paper-dim:#9A9990; --paper-rule:rgba(30,30,28,.12);
+  /* function hues: no longer painted on the face (function is printed in the
+     futures' tension block) — kept for TensionCurve, which is parked */
   --home:#3D9A80; --build:#D69A38; --tension:#D6553F; --outside:#7C6BC4;
-  --disp:'Space Grotesk',system-ui,sans-serif;
-  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
-  background:var(--bg); color:var(--ink); font-family:var(--disp);
-  padding:20px; border-radius:16px; max-width:1180px; margin:0 auto;
-  -webkit-font-smoothing:antialiased;
+  --din:'Barlow',system-ui,sans-serif;
+  --cond:'Barlow Semi Condensed','Barlow',system-ui,sans-serif;
+  background:var(--page); color:var(--ink); font-family:var(--din);
+  font-feature-settings:"tnum" 1; -webkit-font-smoothing:antialiased;
+  max-width:1640px; margin:0 auto; padding:24px 16px 64px;
 }
 .ce-root *{box-sizing:border-box;}
-.ce-root h1{font-size:22px; font-weight:700; letter-spacing:-.02em; margin:0;}
-.ce-sub{margin:2px 0 0; font-size:12.5px; color:var(--muted); max-width:46ch; line-height:1.4;}
+.ce-root button{font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer;}
+.ce-root button:focus-visible, .ce-lvl-bar:focus-visible{outline:2px solid var(--lamp); outline-offset:3px;}
 
-/* Three zones, reading down: who this is (and the share action for the page),
-   then what chords there are, then how they sound. The transport — play and
-   edit what's already there — lives with the progression itself. */
-.ce-head{display:flex; flex-direction:column; gap:16px;}
-.ce-topline{display:flex; gap:16px; justify-content:space-between; align-items:flex-start;}
-.ce-brand{display:flex; gap:12px; align-items:flex-start;}
+/* the lamp picker, above the device */
+.ce-lamps{display:flex; justify-content:flex-end; gap:10px; margin:0 0 16px;}
+.ce-lamps button{width:16px; height:16px; border-radius:50%; background:var(--sw);}
+.ce-root .ce-lamps button{background:var(--sw);}
+.ce-lamps button[aria-checked=true]{box-shadow:0 0 0 2.5px var(--page), 0 0 0 4px var(--sw);}
 
-.ce-share{
-  flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
-  width:32px; height:32px; padding:0; border-radius:9px;
-  border:1px solid var(--line); background:var(--panel); color:var(--muted);
-  cursor:pointer; transition:background .12s ease, color .12s ease, border-color .12s ease;
+/* --- chassis & modules ---------------------------------------------------
+   The seams are the chassis showing through a 2px gap between modules. */
+.ce-chassis{
+  background:var(--seam); border-radius:24px; overflow:hidden;
+  display:grid; gap:2px;
+  box-shadow:0 1px 0 rgba(0,0,0,.04), 0 30px 80px -40px rgba(0,0,0,.25);
+  grid-template-columns:1.2fr 1fr 1.45fr .75fr;
+  grid-template-areas:
+    "plate plate plate plate"
+    "key   gen   play  out"
+    "disp  disp  disp  disp"
+    "fut   fut   fut   fut"
+    "snd   snd   snd   snd";
 }
-.ce-share:hover:not(:disabled){background:var(--bg); color:var(--ink); border-color:var(--ink);}
-.ce-share:focus-visible{outline:2px solid var(--ink); outline-offset:2px;}
+.ce-mod{
+  background:var(--face); box-shadow:inset 0 1px 0 var(--hi), inset 1px 0 0 var(--hi);
+  padding:24px 30px 30px; min-width:0;
+}
+.ce-plate{grid-area:plate;} .ce-m-key{grid-area:key;} .ce-m-gen{grid-area:gen;}
+.ce-m-play{grid-area:play;} .ce-m-out{grid-area:out;} .ce-m-disp{grid-area:disp;}
+.ce-m-fut{grid-area:fut;} .ce-m-snd{grid-area:snd;}
+
+.ce-mod-h{
+  display:flex; align-items:baseline; gap:14px; margin:0 0 24px;
+  font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print);
+}
+.ce-mod-h b{font-weight:600; color:var(--print2);}
+.ce-mod-h::after{content:""; flex:1; height:1.5px; background:var(--seam); transform:translateY(-6px);}
+
+.ce-lbl{
+  display:block; font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase;
+  color:var(--print); margin:0 0 10px;
+}
+.ce-print{margin:0; font:500 18px var(--cond); letter-spacing:.06em; color:var(--print); line-height:1.35;}
+.ce-row{display:flex; flex-wrap:wrap; gap:24px 30px; align-items:flex-end;}
+.ce-stack > * + *{margin-top:24px;}
+
+/* --- nameplate ------------------------------------------------------------ */
+.ce-plate{display:flex; align-items:center; gap:36px; padding:22px 34px;}
+.ce-plate h1{margin:0; font:700 38px var(--din); letter-spacing:-.015em; white-space:nowrap;}
+.ce-leds{display:flex; gap:28px; margin-left:auto;}
+.ce-led{display:flex; align-items:center; gap:10px; font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print);}
+.ce-led i{width:10px; height:10px; border-radius:50%; background:var(--unlit); transition:background .15s, box-shadow .15s;}
+.ce-led.on i{background:var(--lamp); box-shadow:0 0 8px var(--lamp-glow);}
+/* a speaker grille: 9px dot pitch, so the height has to be a multiple of 9 or
+   the bottom row is cut in half */
+.ce-grille{width:180px; height:36px; background-image:radial-gradient(circle, #CFCFC9 1.6px, transparent 2px); background-size:9px 9px;}
+.ce-root .ce-share{width:44px; height:44px; display:grid; place-items:center; color:var(--print); border-radius:50%;}
+.ce-share svg{width:24px; height:24px;}
+.ce-share:hover:not(:disabled){color:var(--ink);}
 .ce-share:disabled{opacity:.35; cursor:default;}
-.ce-share.copied:not(:disabled){background:var(--home); border-color:var(--home); color:var(--panel);}
-.ce-mark{font-size:26px; line-height:1; color:var(--tension); transform:translateY(2px);}
+.ce-share.copied{color:var(--lamp);}
 
-/* chord population on the left, playback preferences pushed right */
-.ce-controls{display:flex; flex-wrap:wrap; gap:14px 24px; align-items:flex-end;}
-.ce-cgroup{display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;}
-/* margin, not justify-content:space-between — when the two groups wrap onto
-   separate rows, space-between leaves the playback group stranded left */
-.ce-cgroup + .ce-cgroup{margin-left:auto;}
-.ce-field{display:flex; flex-direction:column; gap:4px;}
-.ce-field>span{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted);}
-.ce-field select{
-  font-family:var(--mono); font-size:14px; padding:7px 10px; border-radius:9px;
-  border:1px solid var(--line); background:var(--panel); color:var(--ink); cursor:pointer;
+/* --- key groups: cut-out legends, the chosen one lit from behind --------- */
+.ce-bg{
+  display:inline-flex; background:var(--seam); gap:1.5px; border-radius:8px; padding:1.5px;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.06); max-width:100%;
 }
-.ce-tempo input{width:118px; accent-color:var(--ink); cursor:pointer;}
+.ce-bg.col{display:flex; flex-direction:column;}
+.ce-bg > button, .ce-keys > button{
+  min-width:52px; height:48px; padding:0 16px;
+  background:var(--key); display:grid; place-items:center;
+  font:600 20px var(--cond); letter-spacing:.08em; text-transform:uppercase;
+  color:var(--unlit); transition:color .12s, text-shadow .12s, background .12s;
+}
+.ce-root .ce-bg > button, .ce-root .ce-keys > button{background:var(--key);}
+.ce-bg > button:first-child{border-radius:6.5px 0 0 6.5px;}
+.ce-bg > button:last-child{border-radius:0 6.5px 6.5px 0;}
+.ce-bg > button:only-child{border-radius:6.5px;}
+.ce-bg.col > button{justify-items:start; text-transform:none; letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-bg.col > button:first-child{border-radius:6.5px 6.5px 0 0;}
+.ce-bg.col > button:last-child{border-radius:0 0 6.5px 6.5px;}
+.ce-bg.col > button:only-child{border-radius:6.5px;}
+.ce-bg > button:hover:not(:disabled), .ce-keys > button:hover{color:var(--print);}
+.ce-root .ce-bg > button.on, .ce-root .ce-keys > button.on{
+  color:var(--lamp); background:#FFFDFB; text-shadow:0 0 8px var(--lamp-glow);
+}
+.ce-bg > button svg{width:36px; height:20px; overflow:visible;}
+.ce-bg > button.on svg{filter:drop-shadow(0 0 4px var(--lamp-glow));}
+.ce-bg > button:disabled{color:#E9E9E4; cursor:default; text-shadow:none;}
+.ce-bg > button.on:disabled{color:color-mix(in srgb, var(--lamp) 30%, #E9E9E4);}
+.ce-bg > button.on:disabled svg{filter:none;}
 
-.ce-seg{display:inline-flex; background:var(--panel); border:1px solid var(--line); border-radius:9px; overflow:hidden;}
-.ce-seg button{
-  font-family:var(--mono); font-size:12px; text-transform:capitalize;
-  padding:8px 12px; border:0; background:transparent; color:var(--muted); cursor:pointer;
+/* the key selector, laid out as a keyboard. The gaps in the top row show the
+   face rather than the seam, so they read as the spaces between black keys. */
+.ce-keys{
+  display:grid; grid-template-columns:repeat(14, 24px); grid-template-rows:46px 46px; gap:1.5px;
+  background:var(--seam); padding:1.5px; border-radius:8px; width:max-content;
+  background-image:linear-gradient(var(--face), var(--face)); background-size:100% 47.5px; background-repeat:no-repeat;
 }
-.ce-seg button.on{background:var(--ink); color:var(--panel);}
-.ce-toggle{
-  font-family:var(--mono); font-size:12px; padding:8px 13px; border-radius:9px;
-  border:1px solid var(--line); background:var(--panel); color:var(--muted); cursor:pointer; align-self:flex-end;
-}
-.ce-toggle.on{background:var(--ink); color:var(--panel); border-color:var(--ink);}
-.ce-midi{align-self:auto;} /* sits under a field label, not flush with the toggle row */
-.ce-arp{display:inline-flex; gap:6px; align-items:stretch; align-self:flex-end;}
-.ce-arp .ce-toggle{align-self:auto;}
-.ce-arp button:disabled{opacity:.4; cursor:default;}
-.ce-midi:disabled{opacity:.5; cursor:default;}
+.ce-root .ce-keys > button{min-width:0; padding:0; height:auto; letter-spacing:.02em;}
+.ce-root .ce-keys > button.acc{background:#F1F1EE;}
+.ce-root .ce-keys > button.acc.on{background:#FFF9F4;}
+.ce-keys > button:nth-child(1){border-top-left-radius:0;}
 
-/* --- the sound concertina -------------------------------------------------
-   Opening it pushes the page down rather than floating over the progression,
-   so it stays in normal flow. Animating to height:auto isn't a thing, but a
-   grid row animating 0fr -> 1fr is, and it needs no measured height — so the
-   panel can grow or shrink with its own content and still slide. All the
-   padding and the border live on the inner element: anything on the outer
-   would refuse to collapse to nothing when closed. */
-.ce-console{display:flex; flex-direction:column;}
-.ce-sound{
-  display:grid; grid-template-rows:0fr;
-  transition:grid-template-rows .3s cubic-bezier(.3,.8,.35,1);
-}
-.ce-sound.open{grid-template-rows:1fr;}
-/* contain:layout is for WebKit — without it the last frame of the transition
-   can flicker on a retina display. It changes nothing elsewhere: overflow
-   already made this a containing block. */
-.ce-sound-clip{overflow:hidden; min-height:0; contain:layout;}
-.ce-sound-inner{
-  margin-top:16px; padding:14px 16px; border-radius:13px;
-  background:var(--panel); border:1px solid var(--line);
-  opacity:0; transition:opacity .18s ease .05s;
-}
-.ce-sound.open .ce-sound-inner{opacity:1;}
-.ce-sound-btn{display:inline-flex; align-items:center; gap:6px;}
-.ce-chev{font-size:9px; line-height:1; transition:transform .25s ease;}
-.ce-sound-btn.on .ce-chev{transform:rotate(180deg);}
+/* Mutate's amount: four lines, press one to light up to it */
+.ce-steps-wrap{display:flex; align-items:center; gap:16px;}
+.ce-steps{display:flex; gap:8px; height:48px; align-items:stretch; padding:0 4px;}
+.ce-root .ce-steps button{width:8px; border-radius:1.5px; background:var(--unlit); transition:background .12s, box-shadow .12s;}
+.ce-root .ce-steps button:hover{background:#C6C6BF;}
+.ce-root .ce-steps button.lit{background:var(--lamp); box-shadow:0 0 5px var(--lamp-glow);}
+.ce-steps-val{font:500 20px var(--din); min-width:2.2em;}
 
-.ce-sound-head{display:flex; flex-wrap:wrap; gap:8px 18px; align-items:flex-end; margin-bottom:14px;}
-.ce-sound-note{margin:0; font-size:11.5px; color:var(--muted); line-height:1.45; max-width:58ch; flex:1 1 260px;}
-
-/* auto-fit rather than a fixed column count: the five groups sit in one row on
-   a wide screen and reflow to two or one without a breakpoint each */
-.ce-sound-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(178px, 1fr)); gap:16px 22px;}
-.ce-sgroup{display:flex; flex-direction:column; gap:8px; min-width:0;}
-.ce-sgroup h4{margin:0 0 1px; font-weight:500;}
-.ce-knob{display:flex; flex-direction:column; gap:3px; cursor:pointer;}
-.ce-knob-top{display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-family:var(--mono); font-size:10.5px;}
-.ce-knob-top em{font-style:normal; color:var(--muted); letter-spacing:.04em;}
-/* tabular figures so a value counting up doesn't jiggle the label beside it */
-.ce-knob-top b{font-weight:500; color:var(--ink); font-variant-numeric:tabular-nums;}
-.ce-knob input[type=range]{width:100%; margin:0; accent-color:var(--ink); cursor:pointer;}
-.ce-knob-enum select{
-  font-family:var(--mono); font-size:12px; padding:5px 8px; border-radius:8px;
-  border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer; width:100%;
+/* --- momentary keys: do something, hold no state ------------------------- */
+.ce-root .ce-key{
+  height:56px; min-width:56px; padding:0 20px; border-radius:8px; background:var(--key);
+  box-shadow:0 0 0 1.5px var(--seam), 0 2.5px 0 var(--seam), inset 0 1px 0 #fff;
+  font:600 20px var(--cond); letter-spacing:.1em; text-transform:uppercase; color:var(--ink);
+  display:inline-grid; place-items:center; grid-auto-flow:column; gap:12px;
+  transition:transform .06s, box-shadow .06s, color .12s;
 }
+.ce-root .ce-key:active:not(:disabled){transform:translateY(2.5px); box-shadow:0 0 0 1.5px var(--seam), 0 0 0 var(--seam), inset 0 1px 3px rgba(0,0,0,.06);}
+.ce-root .ce-key:disabled{color:var(--unlit); cursor:default;}
+.ce-key svg{width:20px; height:20px;}
+.ce-root .ce-key.big{height:76px; width:76px; padding:0;}
+.ce-key.big svg{width:24px; height:24px;}
+.ce-root .ce-key.live{color:var(--lamp);}
+.ce-key.live svg{filter:drop-shadow(0 0 5px var(--lamp-glow));}
 
-@media (prefers-reduced-motion: reduce){
-  .ce-sound, .ce-sound-inner, .ce-chev{transition:none;}
+/* --- levels: thin bars, ink up to the value ------------------------------ */
+.ce-lvl{display:block; min-width:0;}
+.ce-lvl-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; gap:10px;}
+.ce-lvl-top .ce-lbl{margin:0;}
+.ce-lvl-val{font:500 20px var(--din); color:var(--ink); white-space:nowrap;}
+.ce-lvl-bar{
+  display:flex; justify-content:space-between; align-items:flex-end;
+  height:26px; cursor:ew-resize; touch-action:none; user-select:none; border-radius:2px;
 }
+.ce-lvl-bar i{width:3px; height:100%; background:var(--unlit); border-radius:.75px; flex:none;}
+.ce-lvl-bar i.lit{background:var(--ink);}
+.ce-lvl.wide{max-width:520px;}
+.ce-lvl.wide .ce-lvl-bar{height:36px;}
+.ce-lvl.wide .ce-lvl-val{font-size:38px; letter-spacing:-.01em;}
 
-.ce-eyebrow{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted);}
+/* --- the display: a white e-ink panel, ink and nothing else -------------- */
+.ce-m-disp{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:34px;}
+.ce-screen{
+  background:var(--paper); color:var(--paper-ink); min-width:0;
+  border-radius:10px; padding:24px 30px 20px; position:relative;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.07), inset 0 2px 6px rgba(0,0,0,.07), 0 0 0 7px #F5F5F2, 0 0 0 8.5px var(--seam);
+  /* the panel's paper tooth */
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .025 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.ce-scr-top{
+  display:flex; flex-wrap:wrap; gap:10px 32px; align-items:center;
+  font:500 20px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--paper-dim);
+  margin-bottom:22px;
+}
+.ce-scr-top b{color:var(--paper-ink); font-weight:600;}
+.ce-gens{margin:0 0 0 auto; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:6px; max-width:100%;}
+.ce-root .ce-gen{
+  width:28px; height:28px; display:grid; place-items:center;
+  border:1.5px solid var(--paper-dim); border-radius:3px;
+  font:600 15px var(--cond); letter-spacing:0; color:var(--paper-dim);
+}
+.ce-root .ce-gen:hover{border-color:var(--paper-ink); color:var(--paper-ink);}
+.ce-root .ce-gen.on{background:var(--paper-ink); border-color:var(--paper-ink); color:var(--paper);}
+.ce-root .ce-gen.next, .ce-gen.ghost{border-style:dashed; border-color:var(--paper-ink); color:var(--paper-ink);}
+.ce-gen.ghost{cursor:default;}
 
-.ce-track{margin-top:20px; background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:14px 16px;}
-.ce-track-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;}
-.ce-total-motion{font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:0; text-transform:none; font-weight:600;}
-.ce-transport{display:flex; gap:6px;}
-.ce-transport button{
-  font-family:var(--mono); font-size:12px; padding:6px 11px; border-radius:8px;
-  border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer;
-}
-.ce-transport button:disabled{opacity:.4; cursor:default;}
-.ce-suggest{display:inline-flex; align-items:stretch; align-self:flex-end;}
-.ce-suggest .ce-toggle{align-self:auto; border-radius:9px 0 0 9px;}
-.ce-suggest select{
-  font-family:var(--mono); font-size:11px; padding:0 6px 0 7px; cursor:pointer;
-  border:1px solid var(--line); border-left:0; border-radius:0 9px 9px 0;
-  background:var(--panel); color:var(--muted);
-}
-.ce-suggest .ce-toggle:hover, .ce-suggest select:hover{color:var(--ink);}
-.ce-transport button:first-child{background:var(--ink); color:var(--panel); border-color:var(--ink);}
-.ce-transport button:first-child:disabled{background:var(--bg); color:var(--ink);}
-/* the history strip: one chip per generation, newest (and what's queued) on the right */
-.ce-gens{display:flex; gap:6px; list-style:none; margin:0 0 10px; padding:0 0 2px; overflow-x:auto;}
-.ce-gens li{flex:0 0 auto;}
-.ce-gen{
-  display:inline-flex; align-items:baseline; gap:6px; padding:5px 9px; border-radius:8px;
-  font-family:var(--mono); font-size:11px; color:var(--muted);
-  border:1px solid var(--line); background:var(--bg); cursor:pointer; opacity:.75;
-}
-.ce-gen:hover{opacity:1; color:var(--ink);}
-.ce-gen.on{opacity:1; color:var(--ink); background:var(--panel); border-color:var(--ink);}
-.ce-gen.next, .ce-gen.ghost{opacity:1; border-style:dashed; border-color:var(--ink); color:var(--ink);}
-.ce-gen.ghost{cursor:default; background:transparent;}
-.ce-gen-chord{border-bottom:2px solid var(--c); padding-bottom:1px;}
-.ce-gen-chord.changed{font-weight:600;}
-.ce-gen-tag{font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted);}
-.ce-gen-empty{font-style:italic;}
-button.ce-toggle:disabled{opacity:.4; cursor:default;}
-.ce-transport button.ce-playing{background:var(--tension); border-color:var(--tension); color:var(--panel);}
-.ce-share.copied:not(:disabled){background:var(--ink); color:var(--panel); border-color:var(--ink);}
-
-/* the tension hue, because something is being withheld — not an error colour */
 .ce-nosound{
-  display:flex; gap:12px; align-items:flex-start; margin:0 0 12px; padding:10px 12px;
-  border-radius:10px; border:1px solid color-mix(in srgb, var(--tension) 40%, transparent);
-  background:color-mix(in srgb, var(--tension) 10%, var(--panel));
+  display:flex; gap:16px; align-items:flex-start; margin:0 0 20px; padding:14px 18px;
+  border:2px solid var(--paper-ink); border-radius:6px;
 }
-.ce-nosound p{margin:0; font-size:12.5px; line-height:1.5; color:var(--ink); flex:1; max-width:78ch;}
-.ce-nosound i{font-style:normal; font-family:var(--mono); font-size:11.5px;}
-.ce-nosound-x{
-  flex:0 0 auto; width:24px; height:24px; padding:0; border-radius:6px; cursor:pointer;
-  border:1px solid transparent; background:transparent; color:var(--muted); font-size:16px; line-height:1;
-}
-.ce-nosound-x:hover{color:var(--ink); border-color:var(--line);}
+.ce-nosound p{margin:0; font-size:18px; line-height:1.45; flex:1; max-width:78ch;}
+.ce-nosound i{font-style:normal; font-weight:600;}
+.ce-root .ce-nosound-x{flex:0 0 auto; width:32px; height:32px; border-radius:4px; font-size:24px; line-height:1; color:var(--paper-dim);}
+.ce-root .ce-nosound-x:hover{color:var(--paper-ink);}
 
-.ce-empty{font-size:13px; color:var(--muted); line-height:1.5; margin:4px 0; max-width:60ch;}
+.ce-empty{font-size:22px; color:var(--paper-dim); line-height:1.5; margin:24px 0; max-width:60ch;}
 
-.ce-curve{width:100%; height:46px; display:block; margin:2px 0 12px;}
-.ce-curve-base{stroke:var(--line); stroke-width:.5; stroke-dasharray:1.5 1.5;}
-.ce-curve-line{fill:none; stroke:var(--ink); stroke-width:1; opacity:.55; vector-effect:non-scaling-stroke;}
-
-/* stage: the roll on the left, the futures fanning out on the right */
-/* Stacked, not side by side: sharing the width capped the roll at about five
-   chords before it had to scroll, and the roll is the thing you're reading. Full
-   width buys roughly eleven, and the futures get the whole width underneath. */
-.ce-stage{display:flex; flex-direction:column; align-items:stretch; gap:16px;}
-.ce-roll{width:100%; min-width:0; overflow-x:auto; padding:2px 0 4px;}
+.ce-roll{width:100%; min-width:0; overflow-x:auto; padding:2px 0 8px;}
 .ce-roll-inner{position:relative;}
 .ce-roll-links{position:absolute; top:0; left:0; z-index:0; overflow:visible; pointer-events:none;}
-.ce-roll-link{stroke:var(--ink); stroke-width:1; opacity:.13;}
-.ce-roll-link.held{opacity:.24;}
-.ce-roll-lane{stroke:var(--ink); stroke-width:1; opacity:.18; stroke-dasharray:2 4;}
-/* the bass voice: same pill, heavier outline, so it reads as the floor under the chord */
-.ce-roll-note.bass{border-width:1.5px; border-color:color-mix(in srgb, var(--c) 70%, transparent); font-weight:600;}
-.ce-roll-cols{position:relative; z-index:1; display:flex; gap:10px; align-items:flex-start;}
-.ce-roll-col{--c:var(--home); flex:0 0 auto; display:flex; flex-direction:column; gap:9px;}
+.ce-roll-link{fill:none; stroke:var(--paper-ink); stroke-width:1.5; stroke-linejoin:miter;}
+.ce-roll-lane{stroke:var(--paper-rule); stroke-width:1.5; stroke-dasharray:4 5;}
+.ce-roll-cols{position:relative; z-index:1; display:flex; gap:44px; align-items:flex-start;}
+.ce-roll-col{flex:0 0 auto; display:flex; flex-direction:column; gap:16px;}
 .ce-roll-notes{position:relative; display:block; width:100%;}
-.ce-roll-note{
-  position:absolute; left:0; right:0; height:18px; padding:0;
-  display:flex; align-items:center; justify-content:center; cursor:pointer;
-  font-family:var(--mono); font-size:11px; font-weight:500; color:var(--ink); letter-spacing:.02em;
-  background:color-mix(in srgb, var(--c) 14%, var(--panel));
-  border:1px solid color-mix(in srgb, var(--c) 45%, transparent); border-radius:5px;
+.ce-root .ce-roll-note{
+  position:absolute; left:0; right:0; height:26px; padding:0 10px;
+  display:flex; align-items:center; justify-content:space-between;
+  font:600 17px var(--cond); letter-spacing:.04em; color:var(--paper-ink);
+  background:var(--paper); border:2px solid var(--paper-ink); border-radius:5px;
   /* top is inline-styled from the pitch band; easing it means the whole roll
      glides when a new chord widens the band instead of jumping */
-  transition:background .1s ease, transform .1s ease, top .3s cubic-bezier(.3,.8,.35,1);
+  transition:background .1s ease, color .1s ease, transform .1s ease, top .3s cubic-bezier(.3,.8,.35,1);
 }
+.ce-roll-step{font-style:normal; font-weight:500; color:var(--paper-dim);}
+/* a voice held over from the chord before */
+.ce-root .ce-roll-note.held{border-style:dashed; background:transparent;}
+.ce-root .ce-roll-note:hover{background:color-mix(in srgb, var(--paper-ink) 8%, var(--paper));}
+.ce-root .ce-roll-note:active{transform:scale(.95);}
+.ce-root .ce-roll-note:focus-visible{outline:2px solid var(--paper-ink); outline-offset:2px;}
+/* lit per note, from its onset to its release — a block chord inks in together,
+   an arpeggio walks up the column */
+.ce-root .ce-roll-note.lit{background:var(--paper-ink); color:var(--paper); border-style:solid;}
+.ce-roll-note.lit .ce-roll-step{color:color-mix(in srgb, var(--paper) 65%, transparent);}
+
 /* a freshly chosen chord: its pills fly in from the future row that spawned them */
 @keyframes ce-spawn{
   from{transform:translate(var(--dx), var(--dy)) scale(.5); opacity:0;}
   55%{opacity:1;}
   to{transform:none; opacity:1;}
 }
-.ce-roll-note.spawn{animation:ce-spawn .34s cubic-bezier(.2,.85,.3,1) backwards; transition:none;}
+.ce-root .ce-roll-note.spawn{animation:ce-spawn .34s cubic-bezier(.2,.85,.3,1) backwards; transition:none;}
 @keyframes ce-settle{from{opacity:0; transform:translateY(-5px);} to{opacity:1; transform:none;}}
 .ce-roll-tilewrap.spawn{animation:ce-settle .26s ease .19s backwards;}
-.ce-roll-step{
-  position:absolute; right:3px; /* absolute, so the note name stays optically centred */
-  font-size:9px; font-weight:400; color:var(--muted); letter-spacing:0;
-}
-.ce-roll-note:hover .ce-roll-step, .ce-roll-note.lit .ce-roll-step{color:var(--ink);}
-.ce-roll-note.held{
-  background:color-mix(in srgb, var(--c) 30%, var(--panel));
-  border-color:var(--c);
-}
-.ce-roll-note:hover{background:color-mix(in srgb, var(--c) 42%, var(--panel)); border-color:var(--c);}
-.ce-roll-note:active{transform:scale(.94);}
-.ce-roll-note:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
-/* lit per note, from its onset to its release — a block chord lights together,
-   an arpeggio walks up the column */
-.ce-roll-note.lit{background:color-mix(in srgb, var(--c) 55%, var(--panel)); border-color:var(--c); color:var(--ink);}
-
-.ce-roll-tile{
-  position:relative; display:flex; flex-direction:column; align-items:flex-start; text-align:left; gap:3px;
-  padding:6px 8px 7px 12px; border-radius:9px; border:1px solid var(--line);
-  background:var(--bg); overflow:hidden; cursor:pointer; transition:background .11s ease;
-}
-.ce-roll-tile::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--c);}
-.ce-roll-tile:hover{background:var(--panel);}
-.ce-roll-tile:focus-visible{outline:2px solid var(--ink); outline-offset:2px;}
-.ce-roll-col.playing .ce-roll-tile{background:var(--panel); box-shadow:0 0 0 2px var(--c) inset;}
-.ce-chip-name{font-size:15px; font-weight:600; letter-spacing:-.01em;}
-.ce-chip-slash{font-weight:500; color:var(--muted);}
-.ce-chip-roman{font-family:var(--mono); font-size:10px; color:var(--muted);}
-.ce-chip-dist{
-  align-self:flex-start; margin-top:1px; font-family:var(--mono); font-size:9.5px; font-weight:600; line-height:1;
-  padding:2px 4px; border-radius:5px; color:var(--muted);
-  background:color-mix(in srgb, var(--muted) 12%, transparent);
-}
-.ce-chip-dist.smooth{
-  color:#2f7d5b; background:color-mix(in srgb, #2f7d5b 15%, transparent);
-}
-.ce-chip-dist.far{
-  color:#b0642a; background:color-mix(in srgb, #b0642a 15%, transparent);
-}
-
-/* holds the Δ slot open on the first tile, which has nothing to measure from */
-.ce-chip-ghost{visibility:hidden;}
 
 .ce-roll-tilewrap{position:relative; display:flex; align-items:stretch; gap:4px;}
-.ce-roll-tile{cursor:grab; touch-action:none; user-select:none;}
-.ce-roll-col.dragging{z-index:3;}
-.ce-roll-col.dragging .ce-roll-tile{
-  cursor:grabbing; background:var(--panel);
-  box-shadow:0 8px 20px -12px rgba(34,30,24,.7), 0 0 0 1px var(--c) inset;
+.ce-root .ce-roll-tile{
+  flex:1 1 auto; min-width:0; position:relative;
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:6px 4px 12px; border-radius:6px;
+  cursor:grab; touch-action:none; user-select:none; transition:background .11s ease;
 }
-.ce-roll-col.dragging .ce-roll-note{border-color:var(--c);}
+.ce-root .ce-roll-tile:hover{background:color-mix(in srgb, var(--paper-ink) 5%, transparent);}
+.ce-root .ce-roll-tile:focus-visible{outline:2px solid var(--paper-ink); outline-offset:2px;}
+/* the chord that's sounding gets a cursor under it */
+.ce-roll-col.playing .ce-roll-tile::after{
+  content:""; position:absolute; bottom:2px; left:50%; width:28px; margin-left:-14px; height:4px;
+  background:var(--paper-ink); border-radius:1px;
+}
+.ce-chip-name{font:600 30px var(--din); letter-spacing:-.01em; white-space:nowrap;}
+.ce-chip-slash{font-weight:500; color:var(--paper-dim);}
+.ce-chip-roman{font:500 18px var(--cond); letter-spacing:.12em; color:var(--paper-dim); display:flex; gap:10px;}
+.ce-chip-dist{letter-spacing:.02em;}
+
+.ce-roll-col.dragging{z-index:3;}
+.ce-roll-col.dragging .ce-roll-tile{cursor:grabbing; background:color-mix(in srgb, var(--paper-ink) 8%, transparent);}
+.ce-root .ce-roll-col.dragging .ce-roll-note{border-width:3px;}
 
 /* remove: quiet until you go looking for it, but always reachable by keyboard */
-.ce-roll-del{
-  position:absolute; top:-7px; right:-7px; z-index:2;
-  width:18px; height:18px; padding:0; line-height:1; font-size:13px;
+.ce-root .ce-roll-del{
+  position:absolute; top:-6px; right:26px; z-index:2;
+  width:24px; height:24px; line-height:1; font-size:18px;
   display:flex; align-items:center; justify-content:center;
-  border:1px solid var(--line); border-radius:50%;
-  background:var(--bg); color:var(--muted); cursor:pointer;
+  border:1.5px solid var(--paper-dim); border-radius:50%;
+  background:var(--paper); color:var(--paper-dim);
   opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease;
 }
-.ce-roll-col:hover .ce-roll-del,
-.ce-roll-col:focus-within .ce-roll-del{opacity:1;}
-.ce-roll-del:hover{background:var(--tension); border-color:var(--tension); color:var(--panel);}
-.ce-roll-del:focus-visible{opacity:1; outline:2px solid var(--ink); outline-offset:1px;}
-@media (hover:none){.ce-roll-del{opacity:1;}} /* no hover on touch — just show it */
-.ce-roll-tilewrap .ce-roll-tile{flex:1 1 auto; min-width:0;}
-.ce-roll-invert{display:flex; flex-direction:column; gap:3px; flex:0 0 auto;}
-.ce-inv-btn{
-  display:flex; align-items:center; justify-content:center; flex:1 1 0; width:19px; padding:0;
-  border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--muted);
-  cursor:pointer; transition:background .1s ease, color .1s ease, border-color .1s ease;
+.ce-roll-col:hover .ce-roll-del, .ce-roll-col:focus-within .ce-roll-del{opacity:1;}
+.ce-root .ce-roll-del:hover{background:var(--paper-ink); border-color:var(--paper-ink); color:var(--paper);}
+.ce-root .ce-roll-del:focus-visible{opacity:1;}
+@media (hover:none){.ce-root .ce-roll-del{opacity:1;}}
+.ce-roll-invert{display:flex; flex-direction:column; gap:4px; flex:0 0 auto;}
+.ce-root .ce-inv-btn{
+  display:flex; align-items:center; justify-content:center; flex:1 1 0; width:22px;
+  border:1.5px solid var(--paper-rule); border-radius:5px; color:var(--paper-dim);
+  transition:color .1s ease, border-color .1s ease;
 }
-.ce-inv-btn:hover{background:var(--panel); color:var(--ink); border-color:var(--c);}
-.ce-inv-btn:active{transform:scale(.9);}
-.ce-inv-btn:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
+.ce-root .ce-inv-btn:hover{color:var(--paper-ink); border-color:var(--paper-ink);}
+.ce-root .ce-inv-btn:active{transform:scale(.9);}
 
-/* futures: every chord that could come next, one line each, most tense on top */
-.ce-futures{
-  width:100%; display:flex; flex-direction:column; gap:7px;
-  padding-top:14px; border-top:1px solid var(--line2); /* the seam the roll sits above */
-}
-.ce-futures-head{display:flex; align-items:center; justify-content:space-between; gap:10px;}
-.ce-futures-tools{display:flex; align-items:center; gap:9px; flex:0 0 auto;}
-.ce-futures-axis{
-  font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.06em;
-  min-width:6.2em; text-align:right; cursor:pointer;
-  padding:3px 5px; margin:-3px -5px; border:0; border-radius:6px; background:transparent;
-  transition:background .1s ease, color .1s ease;
-}
-.ce-futures-axis:hover{background:var(--bg); color:var(--ink);}
-.ce-futures-axis:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
-.ce-futures-count{
-  font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.04em;
-}
+/* transport: two short vertical banks beside the panel */
+.ce-transport{display:flex; flex-direction:column; gap:12px; align-items:center;}
+.ce-transport .ce-lbl{margin:0 0 -2px; text-align:center;}
+.ce-transport .ce-lbl ~ .ce-lbl{margin-top:18px;}
+
+/* --- futures -------------------------------------------------------------- */
+.ce-futures{display:flex; flex-direction:column;}
+.ce-fut-head{display:flex; align-items:center; gap:24px; margin-bottom:14px;}
+.ce-fut-head .ce-mod-h{flex:1; margin:0; min-width:0;}
 .ce-filter{
-  width:120px; font-family:var(--mono); font-size:11px; color:var(--ink);
-  padding:4px 8px; border:1px solid var(--line); border-radius:7px; background:var(--bg);
-  transition:border-color .12s ease, background .12s ease;
+  display:flex; align-items:center; gap:12px; width:340px; flex:0 1 auto;
+  border-bottom:1.5px solid var(--seam); padding:4px 2px 6px;
+  font:500 22px var(--din); color:var(--print);
 }
-.ce-filter::placeholder{color:var(--muted); opacity:.85;}
-.ce-filter:focus{outline:none; border-color:var(--ink); background:var(--panel);}
-.ce-filter::-webkit-search-cancel-button{cursor:pointer;}
+.ce-filter:focus-within{border-color:var(--ink);}
+.ce-filter svg{width:20px; height:20px; flex:none;}
+.ce-filter input{border:0; background:none; font:inherit; color:var(--ink); width:100%; min-width:0; outline:none; -webkit-appearance:none; appearance:none;}
+.ce-filter input::placeholder{color:var(--print2);}
+.ce-filter input::-webkit-search-cancel-button{cursor:pointer;}
+.ce-futures-count{font:500 18px var(--cond); color:var(--print); letter-spacing:.04em; white-space:nowrap;}
 
-.ce-futures-note{
-  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
-  margin:4px 0 0; padding:0 4px; font-size:11.5px; color:var(--muted);
+.ce-futures-note{display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:12px 0 0; padding:0 14px; font-size:18px; color:var(--print);}
+.ce-root .ce-futures-hint{
+  font:600 17px var(--cond); letter-spacing:.06em; color:var(--ink);
+  padding:6px 12px; border-radius:6px; border:1.5px dashed var(--seam);
 }
-.ce-futures-hint{
-  font-family:var(--mono); font-size:10.5px; color:var(--ink); cursor:pointer;
-  padding:3px 8px; border-radius:6px; border:1px dashed var(--line);
-  background:transparent; transition:background .1s ease, border-color .1s ease;
-}
-.ce-futures-hint:hover{background:var(--bg); border-color:var(--ink); border-style:solid;}
-.ce-futures-hint:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
-.ce-futures-list{display:flex; flex-direction:column; gap:2px;}
+.ce-root .ce-futures-hint:hover{border-color:var(--ink); border-style:solid;}
+.ce-futures-list{display:flex; flex-direction:column;}
 
-.ce-future{
-  --c:var(--home); --t:0;
-  /* em here resolves against the button's own font-size (the UA default ~13.3px),
-     not the 16px root. The notes track fits the widest spelling a chord can have:
-     four flat names — E♭m7 is ii7 in D♭ major, and spells "E♭ G♭ B♭ D♭". */
-  display:grid; grid-template-columns:14px 5.4em 4.4em 9.6em 2.9em minmax(0,1fr);
-  align-items:center; gap:8px; width:100%; text-align:left;
-  padding:3px 8px 3px 4px; border:1px solid transparent; border-radius:7px;
-  background:transparent; color:var(--ink); cursor:pointer;
-  transition:background .1s ease, border-color .1s ease, transform .1s ease;
+.ce-root .ce-future{
+  display:grid; grid-template-columns:130px 110px 100px 190px 60px minmax(0,1fr);
+  gap:24px; align-items:center; width:100%; text-align:left;
+  padding:12px 14px; border-radius:6px; font:500 22px var(--din); color:var(--ink);
+  transition:background .1s ease, transform .1s ease;
 }
-.ce-future:hover{background:var(--bg); border-color:var(--line2); transform:translateX(2px);}
-.ce-future:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
-.ce-future.resolve{background:color-mix(in srgb, var(--c) 9%, transparent); border-color:color-mix(in srgb, var(--c) 35%, transparent);}
+.ce-futures-list .ce-future + .ce-future{box-shadow:0 -1.5px 0 #EFEFEA;}
+.ce-root .ce-future:hover{background:#F6F6F2;}
+.ce-root .ce-future.head{font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print); cursor:default; padding-top:0;}
+.ce-root .ce-future.head:hover{background:none;}
+.ce-future.head > span{font:inherit;}
+.ce-root .ce-futures-axis{font:inherit; letter-spacing:inherit; text-transform:inherit; color:inherit; justify-self:start;}
+.ce-root .ce-futures-axis:hover{color:var(--ink);}
 
-/* the tension meter doubles as the function swatch — height reads as tension */
-.ce-fu-tension{display:flex; align-items:center; justify-content:center; height:16px;}
-.ce-fu-tension i{
-  display:block; width:5px; border-radius:3px; background:var(--c);
-  height:calc(4px + var(--t) * 12px);
-}
+/* what the chord does and how hard it pulls, in one block */
+.ce-fu-tension{display:flex; flex-direction:column; gap:5px;}
+.ce-fu-func{font:600 12.5px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print); line-height:1;}
+.ce-fu-meter{display:flex; gap:3px;}
+.ce-fu-meter i{width:8px; height:8px; background:var(--unlit); border-radius:1px;}
+.ce-fu-meter i.lit{background:var(--lamp); box-shadow:0 0 4px var(--lamp-glow);}
 /* the name is the audition target — give it a hit area and say so on hover */
 .ce-fu-name{
-  font-size:14.5px; font-weight:600; letter-spacing:-.01em;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  justify-self:start; max-width:100%;
-  padding:1px 4px; margin:-1px -4px; border-radius:5px;
-  transition:background .12s ease, color .12s ease;
+  font-weight:600; font-size:28px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  justify-self:start; max-width:100%; padding:0 6px; margin:0 -6px; border-radius:5px;
+  transition:color .12s ease;
 }
-.ce-fu-name:hover{background:color-mix(in srgb, var(--c) 20%, transparent); color:var(--c);}
-.ce-fu-roman{font-family:var(--mono); font-size:10.5px; color:var(--c); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-.ce-fu-notes{
-  font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--muted);
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-}
-.ce-future:hover .ce-fu-notes{color:var(--ink);}
-.ce-fu-dist{display:flex; justify-content:flex-end;}
-.ce-fu-dist .ce-chip-dist{margin-top:0;}
-.ce-fu-move{
-  font-size:11.5px; line-height:1.35; color:var(--muted);
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-}
-.ce-future:hover .ce-fu-move{color:var(--ink);}
+.ce-fu-name:hover{color:var(--lamp);}
+.ce-fu-roman{font-family:var(--cond); color:var(--print); letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-notes{font-family:var(--cond); color:var(--print); letter-spacing:.06em; font-size:21px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-dist{font-family:var(--cond); color:var(--print); font-size:21px; white-space:nowrap;}
+.ce-fu-move{color:#4A4A45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-future:hover .ce-fu-notes, .ce-future:hover .ce-fu-move{color:var(--ink);}
+.ce-fu-res{font:600 16px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--lamp); margin-left:12px;}
 
 /* choosing: the rest of the futures clear out, the chosen one flies to the roll */
 @keyframes ce-assemble{from{opacity:0; transform:translateY(5px);} to{opacity:1; transform:none;}}
@@ -2442,30 +2617,64 @@ button.ce-toggle:disabled{opacity:.4; cursor:default;}
   30%{transform:translateX(-4px) scale(1.02);}
   to{opacity:0; transform:translateX(-26px) scale(.94);}
 }
-.ce-future.leaving{animation:ce-fu-leave .17s ease forwards; pointer-events:none;}
-.ce-future.chosen{
-  animation:ce-fu-chosen .17s ease forwards; pointer-events:none;
-  background:color-mix(in srgb, var(--c) 20%, transparent); border-color:var(--c);
+.ce-root .ce-future.leaving{animation:ce-fu-leave .17s ease forwards; pointer-events:none;}
+.ce-root .ce-future.chosen{animation:ce-fu-chosen .17s ease forwards; pointer-events:none; background:#F6F6F2;}
+
+/* --- sound ---------------------------------------------------------------- */
+.ce-snd-top{display:flex; flex-wrap:wrap; gap:18px 36px; align-items:flex-end; margin-bottom:30px;}
+.ce-snd-note{flex:1 1 280px; max-width:60ch; padding-bottom:12px;}
+.ce-snd-cols{display:grid; grid-template-columns:repeat(5, minmax(0,1fr));}
+.ce-snd-col{padding:0 30px; min-width:0;}
+.ce-snd-col + .ce-snd-col{box-shadow:-1.5px 0 0 var(--seam);}
+.ce-snd-col:first-child{padding-left:0;}
+.ce-snd-col:last-child{padding-right:0;}
+.ce-snd-h{margin:0 0 20px; font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print2);}
+.ce-snd-col .ce-bg{display:flex;}
+.ce-root .ce-snd-col .ce-bg > button{min-width:0; flex:1; padding:0;}
+
+/* TensionCurve, parked (see the component) */
+.ce-curve{width:100%; height:46px; display:block; margin:2px 0 12px;}
+.ce-curve-base{stroke:var(--seam); stroke-width:.5; stroke-dasharray:1.5 1.5;}
+.ce-curve-line{fill:none; stroke:var(--ink); stroke-width:1; opacity:.55; vector-effect:non-scaling-stroke;}
+
+/* --- narrower: two columns, then one ------------------------------------- */
+@media (max-width:1400px){
+  .ce-chassis{grid-template-columns:1fr 1fr; grid-template-areas:
+    "plate plate" "key gen" "play out" "disp disp" "fut fut" "snd snd";}
+  .ce-snd-cols{grid-template-columns:repeat(2, minmax(0,1fr)); row-gap:36px;}
+  .ce-snd-col{padding:0 20px;}
+  .ce-snd-col:nth-child(odd){padding-left:0; box-shadow:none;}
+  .ce-root .ce-future{grid-template-columns:130px 110px 100px 190px 60px;}
+  .ce-fu-move{display:none;}
 }
-
-.ce-legend{display:flex; flex-wrap:wrap; align-items:center; gap:16px; margin-top:24px; padding-top:14px; border-top:1px solid var(--line);}
-.ce-leg{display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px; color:var(--muted);}
-.ce-leg i{width:11px; height:11px; border-radius:3px; display:inline-block;}
-.ce-leg-note{font-size:11px; color:var(--muted); font-style:italic; margin-left:auto;}
-
-@media (max-width:560px){
-  .ce-controls{width:100%;}
-  /* the notes are the droppable column here — the name has to stay whole */
-  .ce-fu-notes{display:none;}
-  .ce-future{grid-template-columns:12px 5em 4.2em 2.7em minmax(0,1fr); gap:6px;}
-  .ce-fu-move{font-size:11px;}
+@media (max-width:900px){
+  .ce-chassis{grid-template-columns:1fr; grid-template-areas:
+    "plate" "key" "gen" "play" "out" "disp" "fut" "snd";}
+  .ce-mod{padding:20px 20px 24px;}
+  .ce-plate{gap:20px; padding:18px 20px;}
+  .ce-grille, .ce-leds{display:none;}
+  /* the keyboard fills the module rather than running off its edge */
+  .ce-keys{width:100%; grid-template-columns:repeat(14, minmax(0,1fr));}
+  .ce-root .ce-keys > button{font-size:17px;}
+  .ce-plate h1{margin-right:auto;}
+  .ce-m-disp{grid-template-columns:minmax(0,1fr);}
+  .ce-screen{padding:18px;}
+  .ce-transport{flex-direction:row; flex-wrap:wrap; align-items:center;}
+  .ce-transport .ce-lbl, .ce-transport .ce-lbl ~ .ce-lbl{margin:0;}
+  /* the notes and the degree are the droppable columns — the name stays whole */
+  .ce-fu-notes, .ce-fu-roman{display:none;}
+  .ce-root .ce-future{grid-template-columns:130px minmax(0,1fr) 60px; gap:16px; padding:10px 6px;}
+  .ce-fut-head{flex-wrap:wrap;}
+  .ce-filter{width:100%;}
+  .ce-snd-cols{grid-template-columns:minmax(0,1fr);}
+  .ce-root .ce-snd-col{padding:0; box-shadow:none;}
+  .ce-snd-col + .ce-snd-col{margin-top:30px;}
 }
 @media (prefers-reduced-motion:reduce){
-  .ce-future{transition:none;}
-  .ce-future:hover{transform:none;}
+  .ce-root .ce-future{transition:none;}
   .ce-futures-list .ce-future,
-  .ce-future.leaving, .ce-future.chosen,
-  .ce-roll-note.spawn, .ce-roll-tilewrap.spawn{animation:none;}
-  .ce-roll-note{transition:none;}
+  .ce-root .ce-future.leaving, .ce-root .ce-future.chosen,
+  .ce-root .ce-roll-note.spawn, .ce-roll-tilewrap.spawn{animation:none;}
+  .ce-root .ce-roll-note{transition:none;}
 }
 `;

@@ -142,18 +142,34 @@ The engine, reading top to bottom:
 - **`score()` / `salience()` / `optionsFrom(current, key)`** — ranks the next-chord options.
   `optionsFrom` is what the UI calls; it decorates each option with `move`, `motion`, and a
   `resolution` flag.
-- **Controls are grouped by what they act on**, which is the layout's whole organising idea:
-  `.ce-cgroup` one is **chord population** (key, mode, 7ths, Sus, Suggest) flush left;
-  `.ce-cgroup` two is **playback preferences** (voice-leading, bass, arpeggio, loop, output, tempo)
-  pushed right; and **transport & edit** (play, undo, clear) lives down with the progression
-  it acts on. Suggest belongs with the first group rather than the transport because it sets
-  up material rather than editing what's there — the same reason changing key clears the
-  progression. The right-hand group is pushed over with `margin-left:auto` on
-  `.ce-cgroup + .ce-cgroup`, **not** `justify-content:space-between`: the groups wrap onto
-  separate rows on a narrow screen, and space-between would strand the playback group on the
-  left of its own row. Sharing is about the page rather than the progression, so it's an icon
-  at the top right of `.ce-topline`, outside all three groups.
-- **`useMidiOut()`** — the **Output** selector. `status` is a small state machine
+- **The face is a piece of hardware** — [design/hardware.html](design/hardware.html) is the
+  static mockup it was built from, and the reference for anything visual. One white chassis
+  (`.ce-chassis`), modules set into it with 2px seams (the chassis colour showing through the
+  grid gap), each with a printed number and name (`ModHead`): **01 Key** (root, mode, 7ths,
+  Sus), **02 Generate** (Suggest + bars, Mutate + amount, Evolve), **03 Playback** (voicing,
+  bass, hold bass, loop, arpeggio, -4-, tempo), **04 Out** (route and MIDI port), then the
+  display with the **transport** beside it, **05** the futures and **06 Sound**. Generate sits
+  with Key rather than the transport because it sets up material rather than editing what's
+  there — the same reason changing key clears the progression. Four columns, two below
+  1400px, one below 900px. Sharing is about the page, so it's an icon on the nameplate. The
+  whole face is built from a few parts, defined together after the component:
+  **`Keys`** (a row of keys with cut-out legends, the chosen one lit — every former dropdown
+  became one, so the choices are always in view), **`Toggle`** (a key that stays lit, set in
+  a `.ce-bg` alone or with others), **`RootKeys`** (the key laid out as an octave),
+  **`Steps`** (Mutate's amount as four lines) and **`Level`** (below). Legends are words where
+  a word is short and small line drawings (`SYM`, `WAVE_SYM`) where it isn't — cryptic on
+  purpose, with a tooltip on every key. **One lamp colour** lights everything that's on: a
+  random pick from `LAMPS` on each visit, changeable from the dots above the chassis, set as
+  `--lamp` on `.ce-root`; not in the URL, since it's about the visit, not the progression.
+  Pressing the key or mode that's already lit must not clear the progression, hence the
+  early return in `changeKey`.
+- **`Level`** — what every slider became: a row of thin bars, lit in ink up to the value. It
+  replaces a range input, so it carries `role="slider"`, `aria-valuetext`, arrows (Shift for
+  ten), Home and End. `pos` is 0–1 and the caller maps it; `onStep` optionally owns the
+  arrows (tempo's 80 bars are one BPM each, and an arrow is one BPM). The drag is driven from
+  `window` listeners that also let go when `buttons` is 0 — the same lesson as the roll's
+  reordering. `onCommit` fires on release, which is when the Sound module auditions.
+- **`useMidiOut()`** — behind module 04's **Route** keys (Int / MIDI) and port list. `status` is a small state machine
   (`unsupported | insecure | idle | asking | ready | denied`) whose copy lives in
   `MIDI_STATUS`; on a successful enable it selects the first available port straight away —
   you didn't grant MIDI access to keep hearing the built-in synth — but only there, never on
@@ -225,20 +241,14 @@ The engine, reading top to bottom:
   Dynamics and Humanise are about how a chord is *played* rather than how it sounds, so they
   go out the **MIDI port too**; everything else in the panel is timbre, which belongs to
   whatever instrument is on the other end.
-- **The Sound panel** — a concertina under the controls, driven entirely off `SYNTH_PARAMS`,
-  so adding a knob is a line in that table rather than a line of markup. It **pushes the page
-  down** rather than floating over the progression you're listening to, which means normal
-  flow; animating to `height:auto` isn't a thing, but a grid row going `0fr → 1fr` is, and it
-  needs no measured height. All the padding and the border live on `.ce-sound-inner` —
-  anything on the outer element would refuse to collapse to nothing when closed — and
-  `.ce-controls` and the panel share a `.ce-console` wrapper because `.ce-head`'s row gap
-  would otherwise leave a permanent strip of dead space under the control row. The collapsed
-  panel is `inert`, not merely invisible: seventeen controls behind a closed lid should not
-  be tab stops. Releasing a slider **auditions** the chord you're on (or the key's tonic, if
-  the progression is empty) — you can't design a sound you can't hear — but not while
-  playback is running, which is already making the point. The preset name is **derived** by
-  comparing values rather than stored, so a shared link carrying only numbers still opens
-  with the right name in the dropdown, and nudging one slider honestly reads as "Custom".
+- **The Sound module** — module 06, always open at the foot of the face, driven entirely off
+  `SYNTH_PARAMS`, so adding a knob is a line in that table rather than a line of markup: a
+  number becomes a `Level`, an enum (the wave) becomes `Keys` with `WAVE_SYM` legends.
+  Releasing a level **auditions** the chord you're on (or the key's tonic, if the progression
+  is empty) — you can't design a sound you can't hear — but not while playback is running,
+  which is already making the point. The preset name is **derived** by comparing values
+  rather than stored, so a shared link carrying only numbers still opens with the right
+  preset lit, and nudging one level honestly lights **—** (custom).
 - **Random start** — `boot` is `decodeState(search) || randomStart()`: only a URL with **no
   query string at all** gets a random key and a 4-bar suggestion; any parameter, even `?k=0`,
   opens exactly as written, so a shared link or a reload is never re-rolled. The URL sync
@@ -298,17 +308,21 @@ The engine, reading top to bottom:
   four or more notes play as they are. **hold bass** (`holdBass`, needs Bass on) decides where
   the bass voice goes: off, it's the arpeggio's first step — so with -4- a triad over a bass
   plays B 1 3 5; on, it sounds for the chord's whole `dur` under an arpeggio of the upper
-  voices — 1 3 5 3 over a held B. URL: `a4=1`, `ao=rnd`, `bh=1`. The -4-, order and hold-bass
-  controls sit with Arpeggio in `.ce-arp`, disabled while they can't apply — a provisional
-  layout, due a design pass (it already pushes Sound onto a second row at ~800px). `PianoRoll` renders the progression as columns where each voice sits at
+  voices — 1 3 5 3 over a held B. URL: `a4=1`, `ao=rnd`, `bh=1`. On the face, block / rising /
+  random is one row of keys (`arpMode` folds `arp` and `arpOrder` together), with -4- and hold
+  bass beside it, disabled while they can't apply. `PianoRoll` renders the progression as columns where each voice sits at
   its pitch height (`top = (max - midi) * ROW`), so common tones line up across columns and
-  voice leading is visible; a note common with the previous chord gets a `held` style. During playback each pill is
+  voice leading is visible; a note common with the previous chord gets a `held` style (a dashed outline). During playback each pill is
   **lit** (`lit`, a Set of midi) from its own onset to its own release: `playVoiced` takes an
   `onLight` callback and schedules it on `Tone.getDraw()` from the same `chordEvents` that
   sound, so an arpeggio walks up the column, a held bass stays lit under it, and a block
-  chord lights together. Stop cancels the Draw queue so no stray light lands afterwards. A
-  behind-the-columns SVG draws faint **connectors** pairing voices by ascending pitch across
-  adjacent chords (`held` = horizontal). Fixed `ROLL` geometry (`ROW/CELL/COL/GAP`) keeps the
+  chord lights together. The roll sits on a **mono e-ink panel** (`.ce-screen`): ink on paper
+  and nothing else, so a lit pill is filled solid ink and the chord that's sounding gets a
+  cursor bar under its tile. Stop cancels the Draw queue so no stray light lands afterwards. A
+  behind-the-columns SVG draws ink **connectors** pairing voices by ascending pitch across
+  adjacent chords, right-angled the way a panel draws — along from the right edge of one pill,
+  up or down at the midpoint of the gap, along into the next (a held voice is one straight
+  line). Fixed `ROLL` geometry (`ROW/CELL/COL/GAP`) keeps the
   SVG and the flex columns on the same coordinates. The bass voice gets its **own lane** under
   the chords (`ROLL.LANE` gap, dashed rule) rather than its true height, which would open a
   tall band of empty rows between the two; pitch is to scale within each lane. Each note pill is its own button (plays
@@ -318,8 +332,8 @@ The engine, reading top to bottom:
   simply left unlabelled; the chord tile under each column plays the whole chord
   (`onPlay`). The column itself is a plain container — buttons can't nest, which is also why
   the remove **×** is a sibling of the tile positioned over its corner rather than inside it.
-  The first tile has no Δ to show, so it renders a `ce-chip-ghost` (`visibility:hidden`)
-  rather than nothing — same element, so the tiles stay exactly the same height.
+  The tile's Δ sits on the roman line, so the first tile, which has none, is the same
+  height without a placeholder.
 - **Reordering** is pointer-based, not HTML5 drag-and-drop: the columns are a uniform grid,
   so the target index is arithmetic on `clientX` against `colsRef`, and `prog` is reordered
   *live* as you cross a boundary, which lets you watch the voice leading re-solve mid-drag.
@@ -348,13 +362,12 @@ The engine, reading top to bottom:
   origin is stable without the offset-within-the-list dance having to absorb it. One flat list
   (diatonic + colour + suspensions merged, the sort is stable so the engine's ranking
   still shows through within a tension band), **ordered by tension ascending by default** so
-  the resolutions sit up top. Each `FutureRow` is one line — tension meter, name, roman,
-  notes, Δ-from-here, description — so a couple of dozen fit vertically. The `em` values in
-  that grid resolve against the **button's own font-size** (the UA default ~13.3px), not the
-  16px root; the notes track is sized for the widest spelling a chord can have — four flat
-  names, which `E♭m7` (ii7 in D♭ major) actually produces. Below 560px the notes column is
-  the one that gives way, since it's derivable and repeated in the row's tooltip, and the
-  name must stay whole. **Hovering the name** auditions the chord — the name only, so
+  the resolutions sit up top. Each `FutureRow` is one line — the tension block, name,
+  degree, notes, Δ-from-here, description — and a resolution carries a **Resolves** tag in the
+  lamp colour. The **tension block** is where function lives now: the function printed small
+  (`tonic`, `dominant`…) over eight squares lit to the chord's tension. Below 1400px the
+  description goes; below 900px the notes and degree go too, since both are derivable and in
+  the row's tooltip, and the name must stay whole. **Hovering the name** auditions the chord — the name only, so
   scanning a row's description or Δ stays silent; clicking anywhere on the row commits it.
   The `tension ↑` label in the head is a button that flips the sort: ascending puts the
   resolutions on top, descending opens on the outside chords. Direction is deliberately **not** in the URL, same
@@ -378,16 +391,18 @@ The engine, reading top to bottom:
   rect is measured and handed `--dx` / `--dy` back to that point. The `ce-spawn` keyframe
   plays it in reverse. Audio fires on the click, never behind the animation.
   `TensionCurve` still exists in the file but is currently not rendered (removed from the
-  progression view for now). Styles live in the `CSS` template string with design tokens as
+  progression view for now), and it's the one thing still painted in the function hues. Styles live in the `CSS` template string with design tokens as
   CSS custom properties — **no backticks in that string**, they terminate the template
   literal.
 
 ## Invariants — don't break these
 
-- **Colour = function is load-bearing pedagogy.** Every chord *must* have a `func`
-  (`tonic | predominant | dominant | subtonic | secondary | borrowed`) so it gets a hue via
-  `hueOf`, and a numeric `tension` so it plots on the curve. If you add a chord type, wire up
-  both.
+- **Function is load-bearing pedagogy.** Every chord *must* have a `func`
+  (`tonic | predominant | dominant | subtonic | secondary | borrowed`), which the futures print
+  in each row's tension block (and `hueOf` maps to a hue, for `TensionCurve`), and a numeric
+  `tension`, which lights that block's meter and plots on the curve. If you add a chord type,
+  wire up both. Function used to be shown as colour everywhere; the hardware redesign moved it
+  into words, so the face could keep one lamp colour and a mono display.
 - **The model modules are pure and import-free.** Everything in `harmony.js` and `synth.js`
   takes data and returns data — no React, no DOM, no Tone. Don't add an import to either
   file; if something needs a library, it belongs in the presentation layer. Keep the pitch
@@ -413,7 +428,9 @@ The engine, reading top to bottom:
   the incremental voicing computed from the current chain end so it matches the recompute.
   Don't stash midi notes on progression items — toggling voice-leading must re-realise cleanly.
 - **Tailwind is not available** and was avoided deliberately — styles are plain CSS in the
-  `CSS` string. Preserve the CSS-variable token system.
+  `CSS` string. Preserve the CSS-variable token system. `.ce-root button` resets every button,
+  so a component rule that sets a button's `color` or `background` needs `.ce-root` in front of
+  it to outrank the reset.
 
 ## Conventions
 
@@ -432,11 +449,11 @@ Roughly in order of fun (see README for detail):
 2. ✅ **Voice-leading** — done; the **Voice-leading** toggle switches playback from root
    position to `voiceLeadMidi`. The `PianoRoll` makes it legible — held voices align across
    columns — and each tile shows the resulting inversion as a slash chord.
-3. ✅ **Web MIDI out** — done; `useMidiOut` + the **Output** selector. Verified against a
+3. ✅ **Web MIDI out** — done; `useMidiOut` + module 04, **Out**. Verified against a
    Waldorf Protein over USB-C in Chrome.
 4. ✅ **"Suggest a loop"** — done; `suggestLoop` + the **Suggest** control.
 5. ✅ **Make the built-in synth worth listening to** — done; `synth.js` + the **Sound**
-   concertina. Sixteen live controls over waveform, envelope, a resonant filter with an LFO
+   module. Sixteen live controls over waveform, envelope, a resonant filter with an LFO
    on its cutoff, chorus/reverb, and the velocity shaping that stops a block chord sounding
    like an organ. Presets set the sliders rather than hiding them, and the patch rides along
    in the share link.
