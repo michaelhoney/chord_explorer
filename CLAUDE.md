@@ -247,6 +247,9 @@ The engine, reading top to bottom:
 - **The Sound module** — module 06, always open at the foot of the face, driven entirely off
   `SYNTH_PARAMS`, so adding a knob is a line in that table rather than a line of markup: a
   number becomes a `Level`, an enum (the wave) becomes `Keys` with `WAVE_SYM` legends.
+  The one drawing is **`EnvelopeGraph`**, beside the Envelope heading: the ADSR as a shape,
+  its segment widths taken from the levels' positions rather than from seconds — attack is on
+  a log scale from 2ms, and drawn in linear time a short attack is just a vertical line.
   Releasing a level **auditions** the chord you're on (or the key's tonic, if the progression
   is empty) — you can't design a sound you can't hear — but not while playback is running,
   which is already making the point. The preset name is **derived** by comparing values

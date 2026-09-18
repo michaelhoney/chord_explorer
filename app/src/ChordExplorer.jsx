@@ -1809,6 +1809,32 @@ function Knob({ k, value, onChange, onCommit }) {
   );
 }
 
+// The envelope as a shape, printed beside its heading so the four levels under
+// it read as one gesture. Segment widths follow the levels' own positions, not
+// seconds: attack runs 2ms–2s on a log scale, and drawn in linear time a 15ms
+// attack would be a vertical line. So it shows what the levels show — where each
+// one is set — as the outline of a note: up, down to sustain, hold, away.
+function EnvelopeGraph({ sound }) {
+  const W = 104, BASE = 22, TOP = 2, SEG = 26; // px; A, D and R each up to SEG wide
+  const w = (k) => 3 + (SEG - 3) * (paramToPos(k, sound[k]) / 1000);
+  const a = w("attack");
+  const d = w("decay");
+  const r = w("release");
+  const ys = BASE - (BASE - TOP) * sound.sustain;
+  const x1 = a, x2 = a + d, x3 = W - r; // the sustain holds from x2 to x3
+  // decay and release fall away fast and then flatten, as the synth's do
+  const path = `M0 ${BASE}L${x1} ${TOP}Q${x1 + d * 0.15} ${ys} ${x2} ${ys}L${x3} ${ys}Q${x3 + r * 0.15} ${BASE} ${W} ${BASE}`;
+  return (
+    <svg className="ce-adsr" viewBox={`0 0 ${W} ${BASE}`} width={W} height={BASE} aria-hidden="true" focusable="false">
+      <path className="ce-adsr-fill" d={`${path}Z`} />
+      {[x1, x2, x3].map((x, i) => (
+        <line key={i} className="ce-adsr-tick" x1={x} x2={x} y1={TOP} y2={BASE} />
+      ))}
+      <path className="ce-adsr-line" d={path} />
+    </svg>
+  );
+}
+
 // Module 06, always open at the foot of the face: the sound is part of the
 // same instrument as the key and the tempo. Presets are keys like everything
 // else, and the last one, —, lights when the levels match none of them.
@@ -1839,7 +1865,10 @@ function SoundModule({ sound, setSound, onAudition, midiActive }) {
       <div className="ce-snd-cols">
         {SYNTH_GROUPS.map((g) => (
           <div className="ce-snd-col" key={g.name}>
-            <h3 className="ce-snd-h">{g.name}</h3>
+            <div className="ce-snd-hrow">
+              <h3 className="ce-snd-h">{g.name}</h3>
+              {g.name === "Envelope" && <EnvelopeGraph sound={sound} />}
+            </div>
             <div className="ce-stack">
               {g.keys.map((k) => (
                 <Knob key={k} k={k} value={sound[k]} onChange={set(k)} onCommit={onAudition} />
@@ -2667,8 +2696,13 @@ body{margin:0; background:#F3F3F0;}
 .ce-snd-col + .ce-snd-col{box-shadow:-1.5px 0 0 var(--seam);}
 .ce-snd-col:first-child{padding-left:0;}
 .ce-snd-col:last-child{padding-right:0;}
-.ce-snd-h{margin:0 0 20px; font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print2);}
+.ce-snd-hrow{display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin:0 0 20px;}
+.ce-snd-h{margin:0; font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print2);}
 .ce-snd-col .ce-bg{display:flex;}
+.ce-adsr{flex:none; overflow:visible;}
+.ce-adsr-line{fill:none; stroke:var(--ink); stroke-width:1.5; stroke-linejoin:round;}
+.ce-adsr-fill{fill:var(--ink); fill-opacity:.05;}
+.ce-adsr-tick{stroke:var(--seam); stroke-width:1; stroke-dasharray:2 2;}
 .ce-root .ce-snd-col .ce-bg > button{min-width:0; flex:1; padding:0;}
 
 /* TensionCurve, parked (see the component) */
