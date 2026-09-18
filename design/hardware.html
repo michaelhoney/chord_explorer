@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chord Paths</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600&display=swap');
+
+:root {
+  --page:#F3F3F0;
+  --face:#FCFCFA;          /* module face */
+  --seam:#E3E3DE;          /* the groove between modules */
+  --hi:#FFFFFF;            /* highlight edge on a face */
+  --ink:#1C1C1A;
+  --print:#8A8A84;         /* printed legends */
+  --print2:#B4B4AE;
+  --unlit:#D9D9D3;         /* an unlit segment / legend */
+  --key:#FAFAF8;
+  --lamp:#ED67B4;
+  --lamp-glow:rgba(237,103,180,.5);
+
+  /* function colours — for the white panel */
+  --home:#1E9C77; --build:#D69A1E; --tension:#E0432E; --outside:#6E5CE0;
+
+  /* e-ink: paper and ink, nothing else */
+  --paper:#F7F6F3; --paper-ink:#1E1E1C; --paper-dim:#9A9990; --paper-rule:rgba(30,30,28,.10);
+
+  --din:'Barlow',system-ui,sans-serif;
+  --cond:'Barlow Semi Condensed','Barlow',system-ui,sans-serif;
+}
+
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body {
+  background:var(--page); color:var(--ink);
+  font-family:var(--din); font-feature-settings:"tnum" 1;
+  -webkit-font-smoothing:antialiased;
+  padding:28px 16px 64px;
+}
+button { font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer; }
+button:focus-visible, [role=slider]:focus-visible { outline:2px solid var(--lamp); outline-offset:3px; }
+
+/* ── lamp picker, above the device ───────────────────────────────── */
+.mock {
+  max-width:1640px; margin:0 auto 18px; display:flex; flex-wrap:wrap; gap:18px; align-items:center;
+  font:500 11px var(--cond); letter-spacing:.08em; text-transform:uppercase; color:var(--print);
+}
+.lamps { margin-left:auto; display:flex; gap:10px; }
+.lamps button { width:16px; height:16px; border-radius:50%; background:var(--sw); border:0; padding:0; }
+.lamps button[aria-checked=true] { box-shadow:0 0 0 2.5px var(--page), 0 0 0 4px var(--sw); }
+
+/* ── chassis & modules ────────────────────────────────────────────── */
+.chassis {
+  max-width:1640px; margin:0 auto;
+  background:var(--seam);
+  border-radius:24px; overflow:hidden;
+  display:grid; gap:2px;
+  box-shadow:0 1px 0 rgba(0,0,0,.04), 0 30px 80px -40px rgba(0,0,0,.25);
+  grid-template-columns: 1.1fr 1fr 1.5fr .8fr;
+  grid-template-areas:
+    "plate plate plate plate"
+    "key   gen   play  out"
+    "disp  disp  disp  disp"
+    "fut   fut   fut   fut"
+    "snd   snd   snd   snd";
+}
+.mod {
+  background:var(--face);
+  box-shadow:inset 0 1px 0 var(--hi), inset 1px 0 0 var(--hi);
+  padding:24px 30px 30px;
+  min-width:0;
+}
+.mod-h {
+  display:flex; align-items:baseline; gap:14px; margin-bottom:24px;
+  font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print);
+}
+.mod-h b { font-weight:600; color:var(--print2); }
+.mod-h::after { content:""; flex:1; height:1.5px; background:var(--seam); transform:translateY(-6px); }
+
+.lbl {
+  display:block; font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase;
+  color:var(--print); margin:0 0 10px;
+}
+.row { display:flex; flex-wrap:wrap; gap:24px 30px; align-items:flex-end; }
+.stack > * + * { margin-top:24px; }
+
+/* ── nameplate ────────────────────────────────────────────────────── */
+.plate { grid-area:plate; display:flex; align-items:center; gap:36px; padding:22px 34px; }
+.wordmark { margin:0; font:700 38px var(--din); letter-spacing:-.015em; white-space:nowrap; }
+.leds { display:flex; gap:28px; margin-left:auto; }
+.led { display:flex; align-items:center; gap:10px; font:500 18px var(--cond); letter-spacing:.14em; color:var(--print); }
+.led i { width:10px; height:10px; border-radius:50%; background:var(--unlit); }
+.led.on i { background:var(--lamp); box-shadow:0 0 8px var(--lamp-glow); }
+.grille {
+  width:180px; height:36px;
+  background-image:radial-gradient(circle, #CFCFC9 1.6px, transparent 2px);
+  background-size:9px 9px;
+}
+.iconbtn { width:44px; height:44px; display:grid; place-items:center; color:var(--print); border-radius:50%; }
+.iconbtn svg { width:24px; height:24px; }
+.iconbtn:hover { color:var(--ink); }
+
+/* ── button groups: cut-out legends, the chosen one lit from behind ─ */
+.bg {
+  display:inline-flex; background:var(--seam); gap:1.5px;
+  border-radius:8px; padding:1.5px;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.06);
+}
+.bg > button, .keys > button, .tg {
+  min-width:52px; height:48px; padding:0 16px;
+  background:var(--key);
+  display:grid; place-items:center;
+  font:600 20px var(--cond); letter-spacing:.08em; text-transform:uppercase;
+  color:var(--unlit);
+  transition:color .12s, text-shadow .12s, background .12s;
+}
+.bg > button:first-child { border-radius:6.5px 0 0 6.5px; }
+.bg > button:last-child  { border-radius:0 6.5px 6.5px 0; }
+.bg > button:hover, .keys > button:hover, .tg:hover { color:var(--print); }
+.bg > button.on, .keys > button.on, .tg.on {
+  color:var(--lamp); background:#FFFDFB;
+  text-shadow:0 0 8px var(--lamp-glow);
+}
+.bg > button svg, .tg svg { width:36px; height:20px; overflow:visible; }
+.bg > button.on svg, .tg.on svg { filter:drop-shadow(0 0 4px var(--lamp-glow)); }
+.bg > button:disabled, .tg:disabled { color:#E6E6E1; cursor:default; }
+.tg { border-radius:7px; box-shadow:0 0 0 1.5px var(--seam), inset 0 1px 3px rgba(0,0,0,.03); }
+
+/* root selector laid out as a keyboard */
+.keys {
+  display:grid; grid-template-columns:repeat(14, 26px); grid-template-rows:46px 46px; gap:1.5px;
+  background:var(--seam); padding:1.5px; border-radius:8px; width:max-content;
+  background-image:linear-gradient(var(--face), var(--face)); background-size:100% 47.5px; background-repeat:no-repeat;
+}
+.keys > button { min-width:0; padding:0; height:auto; }
+.keys button.acc { background:#F1F1EE; }
+.keys button.acc.on { background:#FFF9F4; }
+
+/* ── steps: a short meter you set by pressing a line ──────────────── */
+.steps { display:flex; gap:8px; height:48px; align-items:stretch; padding:0 4px; }
+.steps button { width:8px; border-radius:1.5px; background:var(--unlit); transition:background .12s, box-shadow .12s; }
+.steps button:hover { background:#C6C6BF; }
+.steps button.lit { background:var(--lamp); box-shadow:0 0 5px var(--lamp-glow); }
+.steps-wrap { display:flex; align-items:center; gap:16px; }
+.steps-val { font:500 20px var(--din); min-width:2.2em; }
+
+/* ── momentary keys (do something, don't hold a state) ────────────── */
+.key {
+  height:56px; min-width:56px; padding:0 20px;
+  border-radius:8px; background:var(--key);
+  box-shadow:0 0 0 1.5px var(--seam), 0 2.5px 0 var(--seam), inset 0 1px 0 #fff;
+  font:600 20px var(--cond); letter-spacing:.1em; text-transform:uppercase; color:var(--ink);
+  display:inline-grid; place-items:center; grid-auto-flow:column; gap:12px;
+  transition:transform .06s, box-shadow .06s;
+}
+.key:active { transform:translateY(2.5px); box-shadow:0 0 0 1.5px var(--seam), 0 0 0 var(--seam), inset 0 1px 3px rgba(0,0,0,.06); }
+.key svg { width:20px; height:20px; }
+.key.big { height:76px; width:76px; padding:0; }
+.key.big svg { width:24px; height:24px; }
+.key.live { color:var(--lamp); }
+.key.live svg { filter:drop-shadow(0 0 5px var(--lamp-glow)); }
+
+/* ── levels: lit-from-behind segments ─────────────────────────────── */
+.lvl { display:block; min-width:0; }
+.lvl-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; gap:10px; }
+.lvl-top .lbl { margin:0; }
+.lvl-val { font:500 20px var(--din); color:var(--ink); letter-spacing:.01em; white-space:nowrap; }
+.lvl-bar {
+  display:flex; justify-content:space-between; align-items:flex-end;
+  height:26px; cursor:ew-resize; touch-action:none; user-select:none;
+}
+.lvl-bar i { width:3px; height:100%; background:var(--unlit); border-radius:.75px; flex:none; }
+.lvl-bar i.lit { background:var(--ink); }
+.lvl.wide .lvl-bar { height:36px; }
+.lvl.wide .lvl-val { font-size:38px; font-weight:500; letter-spacing:-.01em; }
+
+/* ── the display: white e-ink ─────────────────────────────────────── */
+.disp-mod { grid-area:disp; display:grid; grid-template-columns:1fr auto; gap:34px; }
+.screen {
+  background:var(--paper); color:var(--paper-ink);
+  border-radius:10px; padding:24px 30px 20px; position:relative; overflow:auto;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.07), inset 0 2px 6px rgba(0,0,0,.07), 0 0 0 7px #F5F5F2, 0 0 0 8.5px var(--seam);
+  /* e-ink paper tooth */
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .025 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.scr-top {
+  display:flex; gap:32px; align-items:baseline;
+  font:500 20px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--paper-dim);
+  margin-bottom:22px;
+}
+.scr-top b { color:var(--paper-ink); font-weight:600; }
+.scr-top .gens { margin-left:auto; display:flex; gap:6px; }
+.gens i {
+  width:28px; height:28px; font-style:normal; display:grid; place-items:center;
+  border:1.5px solid var(--paper-dim); border-radius:3px; font-size:16px; letter-spacing:0;
+}
+.gens i.cur { background:var(--paper-ink); border-color:var(--paper-ink); color:var(--paper); }
+.gens i.q { border-style:dashed; }
+
+.roll { position:relative; width:max-content; }
+.roll svg.wires { position:absolute; left:0; top:0; pointer-events:none; overflow:visible; }
+.wires path { fill:none; stroke:var(--paper-ink); stroke-width:1.5; stroke-linejoin:miter; }
+.cols { display:flex; gap:var(--gap); position:relative; }
+.col { width:var(--colw); position:relative; }
+.pill {
+  position:absolute; left:0; right:0; height:var(--pillh); border-radius:5px;
+  background:var(--paper);
+  border:2px solid var(--c);
+  font:600 17px var(--cond); letter-spacing:.04em; color:var(--paper-ink);
+  display:flex; align-items:center; justify-content:space-between; padding:0 10px;
+}
+.pill em { font-style:normal; color:var(--paper-dim); font-weight:500; }
+.pill.held { background:transparent; border-style:dashed; }
+.col.playing .pill { background:var(--c); border-color:var(--c); color:var(--paper); }
+.col.playing .pill em { color:color-mix(in srgb, var(--paper) 70%, transparent); }
+.lane { position:absolute; left:calc(var(--gap) / -2); right:calc(var(--gap) / -2); border-top:1.5px dashed var(--paper-rule); }
+.chord-name {
+  position:absolute; left:0; right:0; text-align:center;
+  font:600 32px var(--din); letter-spacing:-.01em;
+}
+.chord-name small { display:block; font:500 18px var(--cond); letter-spacing:.12em; color:var(--paper-dim); margin-top:2px; }
+.col.playing .chord-name::after {
+  content:""; display:block; width:28px; height:4px; background:var(--paper-ink); margin:8px auto 0; border-radius:1px;
+}
+.add-slot {
+  position:absolute; border:2px dashed var(--paper-rule); border-radius:6px;
+  display:grid; place-items:center; font:500 17px var(--cond); letter-spacing:.14em; color:var(--paper-dim);
+}
+
+/* transport: two short vertical banks */
+.transport { display:flex; flex-direction:column; gap:12px; align-items:center; }
+.transport .lbl { margin:0 0 -2px; text-align:center; }
+.transport .lbl:not(:first-child) { margin-top:18px; }
+.key.word { font-size:20px; }
+
+/* ── futures ──────────────────────────────────────────────────────── */
+.fut { grid-area:fut; }
+.frow {
+  display:grid; grid-template-columns:130px 110px 100px 190px 60px 1fr; gap:24px; align-items:center;
+  width:100%; text-align:left; padding:12px 14px; border-radius:6px;
+  font:500 22px var(--din);
+}
+.frow + .frow { box-shadow:0 -1.5px 0 #EFEFEA; }
+.frow:hover { background:#F6F6F2; }
+.frow.head, .frow.head > span { font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print); cursor:default; }
+.frow.head:hover { background:none; }
+.tblock { display:flex; flex-direction:column; gap:5px; }
+.tfunc { font:600 12.5px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print); line-height:1; }
+.tmeter { display:flex; gap:3px; }
+.tmeter i { width:8px; height:8px; background:var(--unlit); border-radius:1px; }
+.tmeter i.lit { background:var(--lamp); box-shadow:0 0 4px var(--lamp-glow); }
+.fname { font-weight:600; font-size:28px; }
+.froman { font-family:var(--cond); color:var(--print); letter-spacing:.04em; }
+.fnotes { font-family:var(--cond); color:var(--print); letter-spacing:.06em; font-size:21px; }
+.fdelta { font-family:var(--cond); color:var(--print); font-size:21px; }
+.fdesc { color:#4A4A45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fdesc b { font-weight:600; color:var(--ink); }
+.res { font:600 16px var(--cond); letter-spacing:.14em; color:var(--lamp); margin-left:12px; }
+.filter {
+  margin-left:auto; display:flex; align-items:center; gap:12px;
+  border-bottom:1.5px solid var(--seam); padding:4px 2px 6px; width:340px;
+  font:500 22px var(--din); color:var(--print); letter-spacing:0; text-transform:none;
+}
+.filter svg { width:20px; height:20px; flex:none; }
+.filter input { border:0; background:none; font:inherit; color:var(--ink); width:100%; outline:none; }
+.fut .mod-h { margin-bottom:14px; }
+
+/* ── sound ────────────────────────────────────────────────────────── */
+.snd { grid-area:snd; }
+.snd-top { margin-bottom:30px; }
+.snd-cols { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); }
+.snd-col { padding:0 30px; min-width:0; }
+.snd-col + .snd-col { box-shadow:-1.5px 0 0 var(--seam); }
+.snd-col:first-child { padding-left:0; }
+.snd-col:last-child { padding-right:0; }
+.snd-col h4 { margin:0 0 20px; font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print2); }
+.snd-col .bg > button { min-width:0; flex:1; padding:0; }
+.snd-col .bg { display:flex; }
+
+.key-mod { grid-area:key; } .gen { grid-area:gen; } .play { grid-area:play; } .out { grid-area:out; }
+
+@media (max-width:1400px) {
+  .chassis { grid-template-columns:1fr 1fr; grid-template-areas:
+    "plate plate" "key gen" "play out" "disp disp" "fut fut" "snd snd"; }
+  .snd-cols { grid-template-columns:repeat(2, minmax(0,1fr)); row-gap:36px; }
+  .snd-col { padding:0 20px; } .snd-col:nth-child(odd) { padding-left:0; box-shadow:none; }
+  .fdesc { display:none; } .frow { grid-template-columns:130px 110px 100px 190px 60px; }
+}
+@media (max-width:900px) {
+  .chassis { grid-template-columns:1fr; grid-template-areas:
+    "plate" "key" "gen" "play" "out" "disp" "fut" "snd"; }
+  .grille, .leds { display:none; }
+  .disp-mod { grid-template-columns:1fr; }
+  .transport { flex-direction:row; flex-wrap:wrap; }
+  .fnotes, .froman { display:none; } .frow { grid-template-columns:130px 1fr 60px; }
+  .filter { width:auto; flex:1; }
+  .snd-cols { grid-template-columns:1fr; }
+  .snd-col { padding:0; box-shadow:none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="mock">
+  <div class="lamps" id="lamps" role="radiogroup" aria-label="Lamp colour"></div>
+</div>
+
+<div class="chassis">
+
+  <!-- nameplate -->
+  <div class="mod plate">
+    <h1 class="wordmark">chord paths</h1>
+    <div class="leds">
+      <div class="led on"><i></i>AUDIO</div>
+      <div class="led"><i></i>MIDI</div>
+      <div class="led on"><i></i>LOOP</div>
+    </div>
+    <div class="grille" aria-hidden="true"></div>
+    <button class="iconbtn" title="Share this progression">
+      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M7 1v8M3.5 4.5 7 1l3.5 3.5M2 8v4.5h10V8"/></svg>
+    </button>
+  </div>
+
+  <!-- 01 key -->
+  <section class="mod key-mod">
+    <div class="mod-h"><b>01</b>Key</div>
+    <div class="stack">
+      <div><span class="lbl">Root</span><div class="keys" id="keys"></div></div>
+      <div class="row">
+        <div><span class="lbl">Mode</span>
+          <div class="bg" data-group><button class="on">Maj</button><button>Min</button><button>Mix</button></div>
+        </div>
+        <div><span class="lbl">Chords</span>
+          <div class="bg"><button class="on" data-toggle title="Sevenths">7</button><button data-toggle title="Suspensions">Sus</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 generate -->
+  <section class="mod gen">
+    <div class="mod-h"><b>02</b>Generate</div>
+    <div class="stack">
+      <div><span class="lbl">Suggest</span><button class="key">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1 9h2l3-6h2l3 6"/></svg>New loop</button></div>
+      <div class="row">
+        <div><span class="lbl">Mutate</span><button class="key">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h5l-2-2M10 9H5l2 2"/></svg>Once</button></div>
+        <div><span class="lbl">Amount</span>
+          <div class="steps-wrap"><div class="steps" id="amount" role="radiogroup" aria-label="Mutation amount"></div><span class="steps-val" id="amount-val"></span></div>
+        </div>
+      </div>
+      <div><span class="lbl">Evolve each loop</span>
+        <div class="bg" data-group><button>Off</button><button class="on">Evo</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 playback -->
+  <section class="mod play">
+    <div class="mod-h"><b>03</b>Playback</div>
+    <div class="stack">
+      <div class="row">
+        <div><span class="lbl">Voicing</span>
+          <div class="bg" data-group>
+            <button title="Root position"><svg viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 10h5M1 6h5M1 2h5M16 11h5M16 7h5M16 3h5"/></svg></button>
+            <button class="on" title="Voice-led"><svg viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 10h20M1 6h9l2 1h9M1 2h9l2 -1h9"/></svg></button>
+          </div>
+        </div>
+        <div><span class="lbl">Bass</span>
+          <div class="bg"><button class="on" data-toggle title="Bass voice">B</button><button data-toggle title="Hold bass under the arpeggio">
+            <svg viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 11h20"/><circle cx="5" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="11" cy="3" r="1.3" fill="currentColor" stroke="none"/><circle cx="17" cy="6" r="1.3" fill="currentColor" stroke="none"/></svg></button></div>
+        </div>
+        <div><span class="lbl">Loop</span>
+          <button class="tg on" data-toggle title="Loop"><svg viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M7 2h8a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8z"/><path d="M13 0l2 2-2 2"/></svg></button>
+        </div>
+      </div>
+      <div class="row">
+        <div><span class="lbl">Arpeggio</span>
+          <div class="bg" data-group id="arp"></div>
+        </div>
+        <div><span class="lbl">Steps</span>
+          <div class="bg" data-group><button class="on" title="As many steps as notes">n</button><button title="Pad a triad to four: 1 3 5 3">-4-</button></div>
+        </div>
+      </div>
+      <div class="lvl wide" data-param="tempo" style="max-width:520px"></div>
+    </div>
+  </section>
+
+  <!-- 04 output -->
+  <section class="mod out">
+    <div class="mod-h"><b>04</b>Out</div>
+    <div class="stack">
+      <div><span class="lbl">Route</span>
+        <div class="bg" data-group><button class="on">Int</button><button>MIDI</button></div>
+      </div>
+      <div><span class="lbl">Port</span>
+        <div class="bg" data-group style="flex-direction:column; width:100%">
+          <button style="justify-content:start; border-radius:6.5px 6.5px 0 0" disabled>1 · Protein</button>
+          <button style="justify-content:start; border-radius:0 0 6.5px 6.5px" disabled>2 · IAC Bus 1</button>
+        </div>
+      </div>
+      <div><span class="lbl">Chan</span>
+        <div class="bg" data-group><button class="on">1</button><button>2</button><button>3</button><button>4</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- display + transport -->
+  <section class="mod disp-mod">
+    <div class="screen">
+      <div class="scr-top">
+        <span><b>C</b> major</span><span>4 bars</span><span>96 bpm</span><span>bar <b>3</b>/4</span>
+        <span class="gens"><i>1</i><i>2</i><i class="cur">3</i><i class="q">4</i></span>
+      </div>
+      <div class="roll" id="roll"></div>
+    </div>
+    <div class="transport">
+      <span class="lbl">Transport</span>
+      <button class="key big live" title="Play">
+        <svg viewBox="0 0 14 14"><path d="M3 1.5v11L12 7z" fill="currentColor"/></svg></button>
+      <button class="key big" title="Stop">
+        <svg viewBox="0 0 14 14"><rect x="2.5" y="2.5" width="9" height="9" fill="currentColor"/></svg></button>
+      <span class="lbl">Delete</span>
+      <button class="key big" title="Delete the last chord">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 3l8 8M11 3l-8 8"/></svg></button>
+      <button class="key big word" title="Clear the progression">All</button>
+    </div>
+  </section>
+
+  <!-- futures -->
+  <section class="mod fut">
+    <div class="mod-h" style="align-items:center"><b>05</b>From G — next
+      <label class="filter"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="5" cy="5" r="3.8"/><path d="M8 8l3 3"/></svg><input placeholder="filter — bvii, f#, dim"></label>
+    </div>
+    <div id="futures"></div>
+  </section>
+
+  <!-- sound -->
+  <section class="mod snd">
+    <div class="mod-h"><b>06</b>Sound</div>
+    <div class="snd-top">
+      <span class="lbl">Preset</span>
+      <div class="bg" data-group id="presets"></div>
+    </div>
+    <div class="snd-cols" id="sound"></div>
+  </section>
+
+</div>
+
+
+<script>
+// ── symbols ──────────────────────────────────────────────────────────
+const S = (d, extra = "") =>
+  `<svg viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round">${d ? `<path d="${d}"/>` : ""}${extra}</svg>`;
+const dot = (x, y) => `<circle cx="${x}" cy="${y}" r="1.4" fill="currentColor" stroke="none"/>`;
+
+const WAVES = {
+  sine:     S("M1 6C3.8-1.5 8.2-1.5 11 6S18.2 13.5 21 6"),
+  triangle: S("M1 10L6 2L11 10L16 2L21 10"),
+  sawtooth: S("M1 10L10 2V10L19 2V10"),
+  square:   S("M1 10V2H6V10H11V2H16V10H21"),
+};
+const ARP = [
+  ["Block chord",  S("", dot(11, 2) + dot(11, 6) + dot(11, 10))],
+  ["Rising",       S("", dot(3, 10) + dot(11, 6) + dot(19, 2))],
+  ["Random order", S("", dot(3, 6) + dot(11, 10) + dot(19, 2))],
+];
+
+document.getElementById("arp").innerHTML =
+  ARP.map(([t, svg], i) => `<button class="${i === 1 ? "on" : ""}" title="${t}">${svg}</button>`).join("");
+document.getElementById("presets").innerHTML =
+  ["Mellow", "Pad", "Pluck", "Glass", "Sweep", "Organ", "—"].map((p, i) =>
+    `<button class="${i === 0 ? "on" : ""}" title="${p === "—" ? "Custom" : p}">${p}</button>`).join("");
+
+// mutate amount: four lines, press one to light up to it
+let amount = 1;
+const amountEl = document.getElementById("amount");
+const paintAmount = () => {
+  amountEl.innerHTML = [1, 2, 3, 4].map((n) =>
+    `<button class="${n <= amount ? "lit" : ""}" role="radio" aria-checked="${n === amount}" title="${n}/4 of the bars" data-n="${n}"></button>`).join("");
+  document.getElementById("amount-val").textContent = `${amount}/4`;
+};
+amountEl.addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  amount = +b.dataset.n; paintAmount();
+});
+paintAmount();
+
+// root keyboard: naturals on the bottom row, sharps above, half a key over
+const NAT = ["C", "D", "E", "F", "G", "A", "B"], ACC = { 0: "C♯", 1: "E♭", 3: "F♯", 4: "A♭", 5: "B♭" };
+document.getElementById("keys").innerHTML =
+  Object.entries(ACC).map(([i, n]) =>
+    `<button class="acc" style="grid-row:1; grid-column:${+i * 2 + 2} / span 2">${n}</button>`).join("") +
+  NAT.map((n, i) =>
+    `<button class="${n === "C" ? "on" : ""}" style="grid-row:2; grid-column:${i * 2 + 1} / span 2">${n}</button>`).join("");
+
+// ── group behaviour: one lit per [data-group], toggles flip ─────────
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || b.disabled || b.closest(".mock, .steps")) return;
+  const grp = b.parentElement;
+  if (b.hasAttribute("data-toggle")) b.classList.toggle("on");
+  else if (grp.matches("[data-group], .keys")) {
+    [...grp.children].forEach((c) => c.classList.toggle("on", c === b));
+  }
+});
+
+// ── levels ───────────────────────────────────────────────────────────
+const P = {
+  tempo:    { label: "Tempo", min: 50, max: 180, v: 96, fmt: "bpm", n: 64 },
+  spread:   { label: "Spread", min: 0, max: 40, v: 6, fmt: "cents" },
+  drive:    { label: "Drive", min: 0, max: 1, v: 0.1, fmt: "pct" },
+  attack:   { label: "Attack", min: 0.002, max: 2, log: 1, v: 0.015, fmt: "sec" },
+  decay:    { label: "Decay", min: 0.02, max: 2, log: 1, v: 0.25, fmt: "sec" },
+  sustain:  { label: "Sustain", min: 0, max: 1, v: 0.55, fmt: "pct" },
+  release:  { label: "Release", min: 0.05, max: 4, log: 1, v: 1.3, fmt: "sec" },
+  cutoff:   { label: "Cutoff", min: 180, max: 14000, log: 1, v: 2400, fmt: "hz" },
+  res:      { label: "Resonance", min: 0, max: 12, v: 2, fmt: "num" },
+  lfoRate:  { label: "LFO rate", min: 0.05, max: 8, log: 1, v: 0.4, fmt: "rate" },
+  lfoDepth: { label: "LFO depth", min: 0, max: 1, v: 0.3, fmt: "pct" },
+  chorus:   { label: "Chorus", min: 0, max: 1, v: 0.35, fmt: "pct" },
+  reverb:   { label: "Reverb", min: 0, max: 1, v: 0.28, fmt: "pct" },
+  room:     { label: "Room size", min: 0.3, max: 8, log: 1, v: 2.5, fmt: "sec" },
+  dynamics: { label: "Dynamics", min: 0, max: 1, v: 0.6, fmt: "pct" },
+  humanise: { label: "Humanise", min: 0, max: 1, v: 0.25, fmt: "pct" },
+};
+const GROUPS = [
+  ["Voice", ["wave", "spread", "drive"]],
+  ["Envelope", ["attack", "decay", "sustain", "release"]],
+  ["Filter", ["cutoff", "res", "lfoRate", "lfoDepth"]],
+  ["Space", ["chorus", "reverb", "room"]],
+  ["Feel", ["dynamics", "humanise"]],
+];
+const toPos = (p, v) => p.log ? Math.log(v / p.min) / Math.log(p.max / p.min) : (v - p.min) / (p.max - p.min);
+const fromPos = (p, t) => p.log ? p.min * Math.pow(p.max / p.min, t) : p.min + t * (p.max - p.min);
+const FMT = {
+  bpm: (v) => `${Math.round(v)}`,
+  pct: (v) => `${Math.round(v * 100)}%`,
+  cents: (v) => `${Math.round(v)}¢`,
+  num: (v) => v.toFixed(1),
+  sec: (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`,
+  hz: (v) => v < 1000 ? `${Math.round(v)} Hz` : `${(v / 1000).toFixed(1)} kHz`,
+  rate: (v) => `${v < 1 ? v.toFixed(2) : v.toFixed(1)} Hz`,
+};
+
+function mountLevel(el, key) {
+  const p = P[key], n = p.n || 36;
+  el.innerHTML = `<div class="lvl-top"><span class="lbl">${p.label}</span><span class="lvl-val"></span></div>
+    <div class="lvl-bar" role="slider" tabindex="0" aria-label="${p.label}">${
+      Array.from({ length: n }, (_, i) => `<i></i>`).join("")}</div>`;
+  const bar = el.querySelector(".lvl-bar"), segs = [...bar.children], out = el.querySelector(".lvl-val");
+  const paint = () => {
+    const lit = Math.round(toPos(p, p.v) * n);
+    segs.forEach((s, i) => s.classList.toggle("lit", i < lit));
+    out.textContent = FMT[p.fmt](p.v);
+    bar.setAttribute("aria-valuetext", out.textContent);
+  };
+  const setFromX = (x) => {
+    const r = bar.getBoundingClientRect();
+    const t = Math.min(1, Math.max(0, (x - r.left) / r.width));
+    p.v = fromPos(p, Math.round(t * n) / n);  // snaps to a segment, like a stepped encoder
+    paint();
+  };
+  bar.addEventListener("pointerdown", (e) => {
+    setFromX(e.clientX);
+    const move = (m) => { if (m.buttons) setFromX(m.clientX); };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  });
+  bar.addEventListener("keydown", (e) => {
+    const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const t = Math.min(1, Math.max(0, Math.round(toPos(p, p.v) * n) / n + d / n));
+    p.v = fromPos(p, t); paint();
+  });
+  paint();
+}
+const waveGroup = `<div><span class="lbl">Wave</span><div class="bg" data-group>${
+  Object.entries(WAVES).map(([k, svg], i) => `<button class="${i === 1 ? "on" : ""}" title="${k}">${svg}</button>`).join("")}</div></div>`;
+document.getElementById("sound").innerHTML = GROUPS.map(([g, keys]) =>
+  `<div class="snd-col"><h4>${g}</h4><div class="stack">${keys.map((k) =>
+    k === "wave" ? waveGroup : `<div class="lvl" data-param="${k}"></div>`).join("")}</div></div>`).join("");
+document.querySelectorAll("[data-param]").forEach((el) => mountLevel(el, el.dataset.param));
+
+// ── the roll ─────────────────────────────────────────────────────────
+const PROG = [
+  { name: "C",  roman: "I",  fn: "home",    upper: [60, 64, 67], bass: 48 },
+  { name: "Am", roman: "vi", fn: "home",    upper: [60, 64, 69], bass: 45 },
+  { name: "F",  roman: "IV", fn: "build",   upper: [60, 65, 69], bass: 41 },
+  { name: "G",  roman: "V",  fn: "tension", upper: [59, 62, 67], bass: 43 },
+];
+const PLAYING = 2;
+const NN = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
+const nm = (m) => NN[m % 12] + (Math.floor(m / 12) - 1);
+const ROW = 13, PILL = 26, COL = 128, GAP = 44, UP_HI = 71, UP_LO = 57, B_HI = 50, B_LO = 40, LANE = 36, NAME = 96;
+const yUp = (m) => (UP_HI - m) * ROW;
+const upH = (UP_HI - UP_LO) * ROW + PILL;
+const yB = (m) => upH + LANE + (B_HI - m) * ROW;
+const rollH = upH + LANE + (B_HI - B_LO) * ROW + PILL;
+
+function renderRoll(roll = document.getElementById("roll"), prog = PROG, playing = PLAYING, next = true) {
+  roll.style.cssText = `--colw:${COL}px; --gap:${GAP}px; --pillh:${PILL}px`;
+  let wires = "";
+  const wire = (y1, y2, i) => {
+    const x1 = (i - 1) * (COL + GAP) + COL, x2 = i * (COL + GAP), mid = (x1 + x2) / 2;
+    return `<path d="M${x1} ${y1} H${mid} V${y2} H${x2}"/>`;  // right angles: the way a panel draws
+  };
+  const cols = prog.map((c, i) => {
+    const prev = prog[i - 1];
+    const pills = c.upper.map((m, v) => {
+      const held = prev && prev.upper.includes(m);
+      const step = prev ? m - prev.upper[v] : null;
+      const lbl = step === null ? "" : step === 0 ? "·" : (step > 0 ? "+" : "−") + Math.abs(step);
+      if (prev) wires += wire(yUp(prev.upper[v]) + PILL / 2, yUp(m) + PILL / 2, i);
+      return `<div class="pill ${held ? "held" : ""}" style="top:${yUp(m)}px"><span>${nm(m)}</span><em>${lbl}</em></div>`;
+    }).join("");
+    const bs = prev ? c.bass - prev.bass : null;
+    if (prev) wires += wire(yB(prev.bass) + PILL / 2, yB(c.bass) + PILL / 2, i);
+    const bass = `<div class="pill" style="top:${yB(c.bass)}px"><span>${nm(c.bass)}</span><em>${bs === null ? "" : (bs > 0 ? "+" : "−") + Math.abs(bs)}</em></div>`;
+    return `<div class="col ${i === playing ? "playing" : ""}" style="--c:var(--paper-ink); height:${rollH + NAME}px">
+      ${pills}<div class="lane" style="top:${upH + LANE / 2}px"></div>${bass}
+      <div class="chord-name" style="top:${rollH + 16}px">${c.name}<small>${c.roman}</small></div></div>`;
+  }).join("");
+  const w = prog.length * (COL + GAP) + COL;
+  roll.innerHTML = `<svg width="${w}" height="${rollH}" class="wires">${wires}</svg>
+    <div class="cols">${cols}${next ? `<div class="col" style="height:${rollH + NAME}px"><div class="add-slot" style="left:0; right:0; top:${yUp(69)}px; height:${yUp(59) - yUp(69) + PILL}px">NEXT</div></div>` : ""}</div>`;
+}
+renderRoll();
+
+// ── futures ──────────────────────────────────────────────────────────
+const FUT = [
+  ["C",  "I",    "tonic",       0, "C E G",    "+4", "<b>Authentic cadence</b> — home.", true],
+  ["Am", "vi",   "tonic",       1, "A C E",    "+2", "<b>Deceptive cadence</b> — you expect home, you get the relative minor.", false],
+  ["Em", "iii",  "tonic",       2, "E G B",    "−3", "Common-tone slide; the dominant goes soft.", false],
+  ["F",  "IV",   "predominant", 3, "F A C",    "−2", "Backs off — the dominant relaxes into the subdominant.", false],
+  ["Dm", "ii",   "predominant", 3, "D F A",    "+5", "Retreats to the predominant; winds the spring again.", false],
+  ["B♭", "♭VII", "borrowed",    4, "B♭ D F",   "+3", "Borrowed from minor — a rock-and-roll sidestep.", false],
+  ["Fm", "iv",   "borrowed",    4, "F A♭ C",   "−2", "Borrowed iv — the minor-plagal shade.", false],
+  ["E7", "V/vi", "secondary",   6, "E G♯ B D", "−3", "Secondary dominant — leans hard on Am.", false],
+];
+document.getElementById("futures").innerHTML =
+  `<div class="frow head"><span>Tension ↑</span><span>Chord</span><span class="froman">Degree</span><span class="fnotes">Notes</span><span>Δ</span><span class="fdesc">What it does</span></div>` +
+  FUT.map(([n, r, fn, t, notes, d, desc, res]) => `
+    <button class="frow">
+      <span class="tblock"><span class="tfunc">${fn}</span>
+        <span class="tmeter">${Array.from({ length: 8 }, (_, i) => `<i class="${i < t + 1 ? "lit" : ""}"></i>`).join("")}</span></span>
+      <span class="fname">${n}</span>
+      <span class="froman">${r}</span>
+      <span class="fnotes">${notes}</span>
+      <span class="fdelta">${d}</span>
+      <span class="fdesc">${desc}${res ? '<span class="res">RESOLVES</span>' : ""}</span>
+    </button>`).join("");
+
+// ── lamp: a colour for the lights, picked at random each visit ──────
+const LAMPS = ["#FF5F1F", "#ED67B4", "#58B4B9", "#FFB000", "#2FD37A", "#FF2E3F", "#2E8BFF"];
+const lampsEl = document.getElementById("lamps");
+function setLamp(hex) {
+  const root = document.documentElement;
+  root.style.setProperty("--lamp", hex);
+  root.style.setProperty("--lamp-glow", `color-mix(in srgb, ${hex} 50%, transparent)`);
+  [...lampsEl.children].forEach((b) => b.setAttribute("aria-checked", b.dataset.lamp === hex));
+}
+lampsEl.innerHTML = LAMPS.map((c) => `<button role="radio" data-lamp="${c}" style="--sw:${c}"></button>`).join("");
+lampsEl.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setLamp(b.dataset.lamp); });
+setLamp(LAMPS[Math.floor(Math.random() * LAMPS.length)]);
+
+</script>
+</body>
+</html>
