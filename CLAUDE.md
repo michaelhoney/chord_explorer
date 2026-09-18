@@ -32,7 +32,7 @@ repo at `/chord_explorer/`, so `vite.config.js` sets `base` to match — which i
 dev server lives under that path rather than at `/`. Change the repo name and that `base`
 has to change with it, or every asset 404s.
 
-Audio starts on your first click (browsers block autoplay until a gesture — expected). Fonts
+Audio starts on your first press — any click or key (browsers block autoplay until a gesture — expected). Fonts
 load from Google Fonts via `@import`; offline it falls back to system fonts and still works.
 
 **Setup gotcha:** Tone.js imports `tslib`, which the current rolldown-based Vite doesn't
@@ -135,8 +135,27 @@ The engine, reading top to bottom:
   told otherwise, so Stop and every port change do `clear()` (drop queued note-offs, or they
   land after the reset) then all-notes-off. Not persisted to the URL — port ids are
   machine-local and a shared link carrying one would be nonsense.
-- **`useSynth()`** — lazy `Tone.PolySynth → Reverb → Destination`, initialised inside a user
-  gesture. Returns `{ ensure, release }`; `release` exists because `Transport.stop()`
+- **`useSynth()`** — `Tone.PolySynth → Reverb → Destination`. Audio starts on the first
+  **`pointerdown` or `keydown` anywhere on the page**, from capture-phase listeners on
+  `window` — **never from a `click` handler**. Safari 27, under its default Auto-Play setting
+  ("Stop Media with Sound"), grants user activation at `pointerdown` and has withdrawn it by
+  `pointerup` (measured: 167ms later, `isActive` false by the time `click` fires), so a
+  context resumed from a click hangs and goes `"interrupted"` — silently, on every site,
+  HTTPS included. Key presses keep activation throughout, which is why keyboard-played pages
+  never noticed. `unlock()` runs on every press: the first swaps in a fresh `Tone.Context`
+  (Tone creates one at *import* — its deprecated top-level exports `Transport`,
+  `Destination`, `Draw` each call `getContext()` as the module loads — and nothing has used
+  it), then **calls** `Tone.start()` synchronously inside the press; later presses restart a
+  context the browser suspended between gestures. The synth is built only once that start has
+  *resolved*, because starting a source on a suspended context gets Tone's `The AudioContext
+  is "suspended"` warning — the one that means audio is broken, so it must not fire when audio
+  is fine. **`ensure()` starts nothing.** It waits on the press's in-flight start (a click
+  handler runs moments after its own `pointerdown`, usually before `resume()` resolves),
+  bounded by `settle()` because a refusing browser leaves `resume()` pending forever, and
+  before any press it answers `null`. That's the other half of the fix: the futures list
+  auditions on **hover**, and on the way to clicking a row the pointer crosses other names, so
+  audio used to get set up from a `mouseenter` — not a gesture, blocked, and the block stuck.
+  Callers of `ensure()` bail on `null`. `release` exists because `Transport.stop()`
   unschedules what hasn't played but a note already triggered rings out on its envelope.
 - **Playback runs on `Tone.getTransport()`**, not a pass scheduled up front. The Loop toggle
   forced this: a loop needs a Stop that lands *now*, and `Transport.cancel()` is the only
@@ -242,8 +261,13 @@ The engine, reading top to bottom:
   returns data — no React, no DOM, no Tone. Don't add an import to that file; if something
   needs a library, it belongs in the presentation layer. Keep the pitch math in plain
   integers.
-- **Audio only after a gesture.** `Tone.start()` is awaited inside `useSynth`'s `ensure`,
-  called from click handlers. Don't hoist synth creation to module load or a bare `useEffect`.
+- **Audio starts on `pointerdown`/`keydown`, never on `click`.** `useSynth`'s `unlock()` is
+  the only thing that calls `Tone.start()` for the first time, from capture-phase listeners on
+  `window`. A click has lost its user activation in Safari 27 by the time its handler runs, so
+  anything that starts audio from `onClick` is silent there — and silent with no error, which
+  is how this shipped. Don't start audio from a hover either, or from module load or a bare
+  `useEffect`. Testing in Chrome proves nothing about this; Chrome keeps activation through
+  the click.
 - **Pitch classes are integers 0–11.** All harmonic and voicing math goes through them (and
   midi integers for register). Note strings are for display and for handing to Tone, never
   for logic.

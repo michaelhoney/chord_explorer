@@ -32,24 +32,81 @@ import {
 // ------------------------------------------------------------------------
 //  AUDIO
 // ------------------------------------------------------------------------
+// a promise that always settles, and never rejects: its own value, or
+// `fallback` if it fails or is still pending after `ms` — for the audio calls
+// Safari can leave pending forever
+const settle = (p, ms, fallback) =>
+  Promise.race([
+    Promise.resolve(p).catch(() => fallback),
+    new Promise((r) => setTimeout(() => r(fallback), ms)),
+  ]);
+
+function buildSynth() {
+  const synth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: "triangle" },
+    envelope: { attack: 0.015, decay: 0.25, sustain: 0.55, release: 1.3 },
+  });
+  synth.volume.value = -9;
+  const rev = new Tone.Reverb({ decay: 2.2, wet: 0.22 });
+  synth.chain(rev, Tone.getDestination());
+  return synth;
+}
+
 function useSynth() {
   const ref = useRef(null);
-  const ensure = useCallback(async () => {
-    if (!ref.current) {
-      await Tone.start();
-      const synth = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "triangle" },
-        envelope: { attack: 0.015, decay: 0.25, sustain: 0.55, release: 1.3 },
-      });
-      synth.volume.value = -9;
-      const rev = new Tone.Reverb({ decay: 2.2, wet: 0.22 });
-      synth.chain(rev, Tone.Destination);
-      ref.current = synth;
-    } else if (Tone.getContext().state !== "running") {
-      await Tone.start();
+
+  // Audio starts on the first pointerdown or keydown anywhere on the page —
+  // not on click. Safari 27 (under its default "Stop Media with Sound") grants
+  // user activation at pointerdown and has withdrawn it by pointerup, so by
+  // the time a click handler runs it no longer counts as a gesture: resume()
+  // never settles and the context goes "interrupted". Key presses keep it
+  // throughout, which is why keyboard-driven pages were unaffected. Capture
+  // phase, so this runs before any handler on the way down can get in first.
+  // Runs on every press, not just the first: it's how a context the browser
+  // suspended between gestures gets started again.
+  const starting = useRef(null); // the in-flight start, which ensure() waits on
+  const unlock = useCallback(() => {
+    if (!starting.current) {
+      // the context is born here, inside the press. Tone makes one at import —
+      // its deprecated top-level exports (Transport, Destination, Draw) each
+      // call getContext() as the module loads — which nothing has used yet,
+      // so it's disposed and replaced rather than resumed.
+      Tone.setContext(new Tone.Context({ latencyHint: "interactive" }), true);
     }
-    return ref.current;
+    if (ref.current && Tone.getContext().state === "running") return;
+    // resume() is *called* here, synchronously inside the press — that's what
+    // needs the gesture. The synth is built once it has actually resolved:
+    // starting a source on a suspended context gets Tone's "AudioContext is
+    // suspended" warning — the same one that means audio is broken, so it
+    // mustn't fire when audio is fine. Called again on a later press if this
+    // one never resolves, which is how a blocked first attempt recovers.
+    starting.current = Tone.start().then(() => {
+      if (!ref.current) ref.current = buildSynth();
+    });
   }, []);
+
+  useEffect(() => {
+    window.addEventListener("pointerdown", unlock, true);
+    window.addEventListener("keydown", unlock, true);
+    return () => {
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+    };
+  }, [unlock]);
+
+  // Everything that plays goes through here, and none of it starts audio.
+  // Before any press it answers null: the only callers that can get here
+  // without a press are hover auditions, and a hover isn't a gesture, so audio
+  // set up from one would be blocked and stay blocked. After a press it waits
+  // on that press's start — a click handler runs moments after its own
+  // pointerdown, usually before resume() has resolved. Bounded, because a
+  // browser that refuses leaves resume() pending forever.
+  const ensure = useCallback(async () => {
+    if (!starting.current) return null;
+    await settle(starting.current, 1500);
+    return ref.current ?? null;
+  }, []);
+
   // Transport.stop() unschedules what hasn't played, but a note already
   // triggered rings out on its own envelope — this cuts it
   const release = useCallback(() => ref.current?.releaseAll(), []);
@@ -365,6 +422,7 @@ export default function ChordExplorer() {
       // ensure() even when routing to MIDI: the Transport and the clock that
       // timestamps the messages both need a running audio context
       const synth = await ensure();
+      if (!synth) return; // no press yet: a hover, before any click
       const t = when ?? Tone.now();
       if (midiActive) {
         midiSend(midi, dur, t, arp && midi.length > 1 ? Math.min(dur * 0.22, 0.16) : 0);
@@ -478,7 +536,7 @@ export default function ChordExplorer() {
   const playAll = useCallback(async () => {
     if (playingRef.current) return stopPlayback(); // the button is Play/Stop
     if (!prog.length) return;
-    await ensure();
+    if (!(await ensure())) return;
     const t = Tone.getTransport();
     t.cancel();
     t.bpm.value = tempo;

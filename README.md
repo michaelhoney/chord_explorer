@@ -44,8 +44,8 @@ CSS from fighting it. Then:
 npm run dev
 ```
 
-Audio starts on your first click (browsers block autoplay until a gesture — this is
-expected). The type faces load from Google Fonts via an `@import`; if you're offline
+Audio starts on your first press — a click or a key (browsers block autoplay until a
+gesture — this is expected). The type faces load from Google Fonts via an `@import`; if you're offline
 it falls back to system fonts and still works.
 
 ## Using it
@@ -169,8 +169,9 @@ Reading the engine top to bottom:
 - **`score()` / `salience()` / `optionsFrom(current, key)`** — ranks the next-chord
   options. `optionsFrom` is the function the UI actually calls; it decorates each option
   with `move`, `motion`, and a `resolution` flag.
-- **`useSynth()`** — lazy `Tone.PolySynth → Reverb → Destination`, initialised inside a
-  user gesture.
+- **`useSynth()`** — `Tone.PolySynth → Reverb → Destination`, started from the first
+  `pointerdown`/`keydown` on the page. CLAUDE.md has the detail, and the Safari reason it
+  can't be a click.
 - **Component + `ChordCard` + `TensionCurve`** — state is `root, mode, add7, tempo,
   prog, playingIdx`. Styles live in the `CSS` template string with design tokens as CSS
   custom properties.
@@ -184,8 +185,10 @@ Reading the engine top to bottom:
 - **The harmony engine is pure.** `buildKey`, `classify`, `optionsFrom`, etc. take data
   and return data — no React, no Tone, no DOM. `harmony.js` has no imports; don't add
   any. It's what makes the engine unit-testable.
-- **Audio only after a gesture.** `Tone.start()` must be awaited inside a click handler.
-  Don't hoist synth creation to module load or a bare `useEffect`.
+- **Audio starts on `pointerdown`/`keydown`, never on `click`.** Safari 27 has withdrawn a
+  click's user activation by the time its handler runs, so audio started from `onClick` is
+  silently blocked there. Don't start it from a hover, module load or a bare `useEffect`
+  either.
 - **Pitch classes are integers 0–11.** All harmonic math goes through them. Note strings
   are for display and for handing to Tone, never for logic.
 - **Tailwind is not available here** and was avoided deliberately — styles are plain CSS
