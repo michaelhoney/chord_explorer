@@ -302,7 +302,11 @@ The engine, reading top to bottom:
   controls sit with Arpeggio in `.ce-arp`, disabled while they can't apply — a provisional
   layout, due a design pass (it already pushes Sound onto a second row at ~800px). `PianoRoll` renders the progression as columns where each voice sits at
   its pitch height (`top = (max - midi) * ROW`), so common tones line up across columns and
-  voice leading is visible; a note common with the previous chord gets a `held` style. A
+  voice leading is visible; a note common with the previous chord gets a `held` style. During playback each pill is
+  **lit** (`lit`, a Set of midi) from its own onset to its own release: `playVoiced` takes an
+  `onLight` callback and schedules it on `Tone.getDraw()` from the same `chordEvents` that
+  sound, so an arpeggio walks up the column, a held bass stays lit under it, and a block
+  chord lights together. Stop cancels the Draw queue so no stray light lands afterwards. A
   behind-the-columns SVG draws faint **connectors** pairing voices by ascending pitch across
   adjacent chords (`held` = horizontal). Fixed `ROLL` geometry (`ROW/CELL/COL/GAP`) keeps the
   SVG and the flex columns on the same coordinates. The bass voice gets its **own lane** under

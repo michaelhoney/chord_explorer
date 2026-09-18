@@ -520,6 +520,20 @@ export default function ChordExplorer() {
   );
   const [playingIdx, setPlayingIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
+  // the notes sounding right now in the playing column, by midi — each lit from
+  // its own onset to its own release, so an arpeggio walks up the pills and a
+  // held bass stays lit under it. Midi alone is enough to name a pill: the bass
+  // lane (D2–F3) sits below anything the upper voices reach.
+  const [lit, setLit] = useState(() => new Set());
+  const light = useCallback((m, on) => {
+    setLit((s) => {
+      if (s.has(m) === on) return s;
+      const n = new Set(s);
+      if (on) n.add(m);
+      else n.delete(m);
+      return n;
+    });
+  }, []);
   const playingRef = useRef(false); // read inside scheduled callbacks and effects
   const loopRef = useRef(false);
   const [query, setQuery] = useState("");
@@ -699,8 +713,9 @@ export default function ChordExplorer() {
     // `chord` is `{ upper, bass }` (bass null when the bass voice is off). `span`
     // is the time an arpeggio spreads over: the chord's whole slot during
     // playback, so the last step runs straight into the next chord. Defaults to
-    // `dur` for one-off plays.
-    async (chord, dur = 1.1, when, span = dur) => {
+    // `dur` for one-off plays. `onLight(midi, on)`, if given, is called on the
+    // audio clock as each note starts and ends — playback uses it to light pills.
+    async (chord, dur = 1.1, when, span = dur, onLight) => {
       // ensure() even when routing to MIDI: the Transport and the clock that
       // timestamps the messages both need a running audio context
       const synth = await ensure();
@@ -712,6 +727,14 @@ export default function ChordExplorer() {
       const events = chordEvents(chord.upper, chord.bass, {
         arp, four: arpFour, order: arpOrder, holdBass, dur, span, sound: soundRef.current,
       });
+      if (onLight) {
+        // from the same events that sound, so the lights can't drift from the notes
+        const draw = Tone.getDraw();
+        for (const e of events) {
+          draw.schedule(() => onLight(e.midi, true), t + e.at);
+          draw.schedule(() => onLight(e.midi, false), t + e.at + e.dur);
+        }
+      }
       if (midiActive) {
         midiSend(events, t);
         return; // the port replaces the built-in synth rather than doubling it
@@ -837,6 +860,8 @@ export default function ChordExplorer() {
     playingRef.current = false;
     setPlaying(false);
     setPlayingIdx(-1);
+    Tone.getDraw().cancel(); // lights queued for notes that will now never sound
+    setLit(new Set());
     // something you asked for lands now rather than being lost; an Evolve
     // mutation was only ever for the next time round, so it goes
     const n = liveRef.current.next;
@@ -877,7 +902,7 @@ export default function ChordExplorer() {
       // duration read at fire time, so a tempo change lands on the next chord;
       // through a ref, so a MIDI port or Arpeggio change reaches a run in flight
       const slot = Tone.Time(atBeat(STEP)).toSeconds();
-      playVoicedRef.current(live.played[i], slot * 0.92, time, slot);
+      playVoicedRef.current(live.played[i], slot * 0.92, time, slot, light);
       Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
       cursor.current = i + 1;
     }, atBeat(STEP), 0);
@@ -885,7 +910,7 @@ export default function ChordExplorer() {
     playingRef.current = true;
     setPlaying(true);
     t.start();
-  }, [prog.length, tempo, ensure, stopPlayback, land]);
+  }, [prog.length, tempo, ensure, stopPlayback, land, light]);
 
   // the toggles reach into a run already in progress
   useEffect(() => { Tone.getTransport().bpm.value = tempo; }, [tempo]);
@@ -1459,6 +1484,7 @@ export default function ChordExplorer() {
                 voicings={voicings}
                 bass={bass}
                 playingIdx={playingIdx}
+                lit={lit}
                 keyRoot={key.root}
                 spawn={spawn}
                 colsRef={colsRef}
@@ -1790,7 +1816,7 @@ function GenNames({ prog, against }) {
 }
 
 function PianoRoll({
-  prog, voicings, bass, playingIdx, keyRoot, spawn, colsRef, dragIdx, dragMoved,
+  prog, voicings, bass, playingIdx, lit, keyRoot, spawn, colsRef, dragIdx, dragMoved,
   onPlay, onPlayNote, onInvert, onRemove, onDragStart, onTileKey,
 }) {
   const { ROW, CELL, COL, GAP } = ROLL;
@@ -1889,6 +1915,7 @@ function PianoRoll({
                         className={
                           "ce-roll-note" +
                           (prevSet && prevSet.has(m) ? " held" : "") +
+                          (i === playingIdx && lit.has(m) ? " lit" : "") +
                           (born ? " spawn" : "")
                         }
                         // --dx / --dy are measured after layout, in the parent
@@ -1917,6 +1944,7 @@ function PianoRoll({
                         className={
                           "ce-roll-note bass" +
                           (i > 0 && bass[i - 1] === m ? " held" : "") +
+                          (i === playingIdx && lit.has(m) ? " lit" : "") +
                           (born ? " spawn" : "")
                         }
                         style={{ top: bassTop(m) }}
@@ -2249,7 +2277,7 @@ button.ce-toggle:disabled{opacity:.4; cursor:default;}
   position:absolute; right:3px; /* absolute, so the note name stays optically centred */
   font-size:9px; font-weight:400; color:var(--muted); letter-spacing:0;
 }
-.ce-roll-note:hover .ce-roll-step, .ce-roll-col.playing .ce-roll-step{color:var(--ink);}
+.ce-roll-note:hover .ce-roll-step, .ce-roll-note.lit .ce-roll-step{color:var(--ink);}
 .ce-roll-note.held{
   background:color-mix(in srgb, var(--c) 30%, var(--panel));
   border-color:var(--c);
@@ -2257,7 +2285,9 @@ button.ce-toggle:disabled{opacity:.4; cursor:default;}
 .ce-roll-note:hover{background:color-mix(in srgb, var(--c) 42%, var(--panel)); border-color:var(--c);}
 .ce-roll-note:active{transform:scale(.94);}
 .ce-roll-note:focus-visible{outline:2px solid var(--ink); outline-offset:1px;}
-.ce-roll-col.playing .ce-roll-note{background:color-mix(in srgb, var(--c) 40%, var(--panel)); border-color:var(--c);}
+/* lit per note, from its onset to its release — a block chord lights together,
+   an arpeggio walks up the column */
+.ce-roll-note.lit{background:color-mix(in srgb, var(--c) 55%, var(--panel)); border-color:var(--c); color:var(--ink);}
 
 .ce-roll-tile{
   position:relative; display:flex; flex-direction:column; align-items:flex-start; text-align:left; gap:3px;
