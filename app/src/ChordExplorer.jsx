@@ -127,6 +127,12 @@ function useSynth(sound) {
   // Runs on every press, not just the first: it's how a context the browser
   // suspended between gestures gets started again.
   const starting = useRef(null); // the in-flight start, which ensure() waits on
+  // Did the last press fail to start audio? Judged by what happened rather than
+  // by which browser this is: a second after a press asked for it, the context
+  // either runs or it doesn't. That catches Safari's "Never Auto-Play", and any
+  // other browser or setting that refuses, and never fires when sound works.
+  const [blocked, setBlocked] = useState(false);
+  const blockCheck = useRef(null);
   const unlock = useCallback(() => {
     if (!starting.current) {
       // the context is born here, inside the press. Tone makes one at import —
@@ -143,7 +149,12 @@ function useSynth(sound) {
     // suspended" warning — the same one that means audio is broken, so it
     // mustn't fire when audio is fine. Called again on a later press if this
     // one never resolves, which is how a blocked first attempt recovers.
+    clearTimeout(blockCheck.current);
+    blockCheck.current = setTimeout(() => {
+      if (Tone.getContext().state !== "running") setBlocked(true);
+    }, 1000);
     starting.current = Tone.start().then(() => {
+      setBlocked(false); // a later press got through — say so by going away
       if (!ref.current) {
         ref.current = buildChain(live.current);
         applySound(ref.current, live.current);
@@ -181,7 +192,8 @@ function useSynth(sound) {
   // Transport.stop() unschedules what hasn't played, but a note already
   // triggered rings out on its own envelope — this cuts it
   const release = useCallback(() => ref.current?.synth.releaseAll(), []);
-  return { ensure, release };
+  useEffect(() => () => clearTimeout(blockCheck.current), []);
+  return { ensure, release, blocked };
 }
 
 // ------------------------------------------------------------------------
@@ -343,6 +355,16 @@ function encodeState(s) {
   return p.toString();
 }
 
+// replaceState can throw — Safari rate-limits it — and a URL that falls behind
+// is not worth a crash
+function writeUrl(path) {
+  try {
+    window.history.replaceState(null, "", path);
+  } catch {
+    // leave the address bar where it was; the next write will catch it up
+  }
+}
+
 function decodeState(search) {
   const p = new URLSearchParams(search);
   if (![...p.keys()].length) return null;
@@ -413,7 +435,9 @@ export default function ChordExplorer() {
   // every frame of a slider drag — it only ever reads the current value
   const soundRef = useRef(sound);
   soundRef.current = sound;
-  const { ensure, release } = useSynth(sound);
+  const { ensure, release, blocked } = useSynth(sound);
+  // dismissing is for this visit; not in the URL — it's about this browser
+  const [noSoundDismissed, setNoSoundDismissed] = useState(false);
   const midi = useMidiOut();
   const { send: midiSend, panic: midiPanic, active: midiActive } = midi;
   const uid = useRef(boot.prog?.length ?? 0);
@@ -438,12 +462,32 @@ export default function ChordExplorer() {
     return { ...k, suspensions: suspensionsFor(k) };
   }, [root, mode, add7]);
 
-  // keep the URL in sync so any state is bookmarkable / shareable
-  useEffect(() => {
+  // Where this state lives, so any of it is bookmarkable and shareable. Worked
+  // out every render, and it's what Share copies — so a share never lags the
+  // page, however recently something changed.
+  const path = useMemo(() => {
     const qs = encodeState({ root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog });
-    const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-    window.history.replaceState(null, "", url);
+    return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
   }, [root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog]);
+
+  // Written to the address bar behind a short debounce, not on every change. A
+  // slider drag changes state every frame, and Safari allows 100 replaceState
+  // calls per 10 seconds — then *throws*, from inside an effect, which unmounts
+  // the whole app to a white page. (Chrome throttles instead, with a warning.)
+  // Trailing edge, so the bar lands where the drag stopped; flushed on pagehide
+  // so a reload straight after a change keeps it. And guarded regardless: the
+  // address bar falling behind is cosmetic, and must never take the app down.
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  useEffect(() => {
+    const id = setTimeout(() => writeUrl(pathRef.current), 300);
+    return () => clearTimeout(id);
+  }, [path]);
+  useEffect(() => {
+    const flush = () => writeUrl(pathRef.current);
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
   const current = prog.length ? prog[prog.length - 1] : null;
   const { inKey, colour, sus } = useMemo(() => optionsFrom(current, key), [current, key]);
@@ -813,12 +857,14 @@ export default function ChordExplorer() {
 
   const [copied, setCopied] = useState(false);
   const share = useCallback(async () => {
+    // the computed URL, not location.href — the address bar trails by up to 300ms
+    const href = window.location.origin + path;
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(href);
     } catch {
       // clipboard blocked (insecure context / permissions) — select-and-copy fallback
       const el = document.createElement("textarea");
-      el.value = window.location.href;
+      el.value = href;
       document.body.appendChild(el);
       el.select();
       document.execCommand("copy");
@@ -826,7 +872,7 @@ export default function ChordExplorer() {
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);
-  }, []);
+  }, [path]);
 
   return (
     <div className="ce-root">
@@ -1047,6 +1093,25 @@ export default function ChordExplorer() {
             <button onClick={clear} disabled={!prog.length}>Clear</button>
           </div>
         </div>
+
+        {blocked && !noSoundDismissed && (
+          <div className="ce-nosound" role="status">
+            <p>
+              <b>No sound?</b> Your browser is blocking audio on this page. In Safari:
+              Safari menu → <i>Settings for {window.location.hostname}…</i> → Auto-Play →{" "}
+              <i>Allow All Auto-Play</i>, then reload. In other browsers, look for a sound
+              or autoplay permission under the icon at the left of the address bar.
+            </p>
+            <button
+              className="ce-nosound-x"
+              onClick={() => setNoSoundDismissed(true)}
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <div className="ce-stage">
           <div className="ce-roll" ref={rollRef}>
@@ -1695,6 +1760,20 @@ const CSS = `
 .ce-transport button:first-child:disabled{background:var(--bg); color:var(--ink);}
 .ce-transport button.ce-playing{background:var(--tension); border-color:var(--tension); color:var(--panel);}
 .ce-share.copied:not(:disabled){background:var(--ink); color:var(--panel); border-color:var(--ink);}
+
+/* the tension hue, because something is being withheld — not an error colour */
+.ce-nosound{
+  display:flex; gap:12px; align-items:flex-start; margin:0 0 12px; padding:10px 12px;
+  border-radius:10px; border:1px solid color-mix(in srgb, var(--tension) 40%, transparent);
+  background:color-mix(in srgb, var(--tension) 10%, var(--panel));
+}
+.ce-nosound p{margin:0; font-size:12.5px; line-height:1.5; color:var(--ink); flex:1; max-width:78ch;}
+.ce-nosound i{font-style:normal; font-family:var(--mono); font-size:11.5px;}
+.ce-nosound-x{
+  flex:0 0 auto; width:24px; height:24px; padding:0; border-radius:6px; cursor:pointer;
+  border:1px solid transparent; background:transparent; color:var(--muted); font-size:16px; line-height:1;
+}
+.ce-nosound-x:hover{color:var(--ink); border-color:var(--line);}
 
 .ce-empty{font-size:13px; color:var(--muted); line-height:1.5; margin:4px 0; max-width:60ch;}
 

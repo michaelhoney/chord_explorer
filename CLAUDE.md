@@ -171,7 +171,13 @@ The engine, reading top to bottom:
   press it answers `null`. That's the other half of the fix: the futures list auditions on
   **hover**, and on the way to clicking a row the pointer crosses other names, so audio used
   to get set up from a `mouseenter` — not a gesture, blocked, and the block stuck. Callers of
-  `ensure()` bail on `null`. `live` is a ref so the chain comes up with the settings in force
+  `ensure()` bail on `null`. **`blocked`** is the other thing it returns: a
+  second after a press asked for audio, the context either runs or it doesn't, and if it
+  doesn't the progression view shows a dismissible **"No sound?"** notice with the Safari
+  Auto-Play path (host name filled in) and a generic hint for other browsers. Judged by what
+  happened, not by sniffing the browser, so it covers Safari's "Never Auto-Play" and anything
+  else that refuses, and never appears when sound works; a later press that gets through
+  clears it. Dismissal is per visit and not in the URL. `live` is a ref so the chain comes up with the settings in force
   at the first press, not the ones from mount. Everything after the synth is built **once** and left in place, wet at zero where
   that means off — rebuilding the chain when a slider moves would cut the sound you're
   trying to listen to — and `applySound(nodes, s)` retunes what already exists. That's the
@@ -209,6 +215,13 @@ The engine, reading top to bottom:
   playback is running, which is already making the point. The preset name is **derived** by
   comparing values rather than stored, so a shared link carrying only numbers still opens
   with the right name in the dropdown, and nudging one slider honestly reads as "Custom".
+- **URL sync** — the query string is computed every render (`path`), but written to the
+  address bar only after 300ms without a change, and flushed on `pagehide`. Never per change:
+  a slider drag changes state every frame, and Safari allows 100 `replaceState` calls per 10
+  seconds and then **throws** — from inside an effect, which unmounts the whole app to a white
+  page (Chrome just throttles, with a warning). `writeUrl` swallows a failed write regardless;
+  a lagging address bar is cosmetic. Share copies the computed `path`, not `location.href`,
+  so it never copies a URL that's up to 300ms stale.
 - **Playback runs on `Tone.getTransport()`**, not a pass scheduled up front. The Loop toggle
   forced this: a loop needs a Stop that lands *now*, and `Transport.cancel()` is the only
   thing that unschedules what's queued. Events are placed in Transport time (`0:beat:0`),
