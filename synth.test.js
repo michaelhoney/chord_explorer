@@ -17,6 +17,8 @@ import {
   oscType,
   lfoRange,
   velocityCurve,
+  arpSequence,
+  chordEvents,
 } from "./synth.js";
 
 // a deterministic stand-in for Math.random — velocityCurve takes rand as an
@@ -234,5 +236,123 @@ describe("velocity shaping", () => {
     const one = velocityCurve(chord, PRESETS.Pad, seq(0.2, 0.4, 0.6, 0.8));
     const two = velocityCurve(chord, PRESETS.Pad, seq(0.2, 0.4, 0.6, 0.8));
     expect(one).toEqual(two);
+  });
+});
+
+// a seeded stand-in for Math.random, for tests that need many draws
+const lcg = (s) => () => (s = (s * 9301 + 49297) % 233280) / 233280;
+
+describe("arpeggio order", () => {
+  const triad = [60, 64, 67]; // C E G
+  const seventh = [55, 60, 64, 67];
+
+  it("rises through the chord by default", () => {
+    expect(arpSequence(triad)).toEqual([60, 64, 67]);
+    expect(arpSequence(seventh)).toEqual(seventh);
+  });
+
+  it("pads a triad to four steps by coming back to the second note: 1 3 5 3", () => {
+    expect(arpSequence(triad, { four: true })).toEqual([60, 64, 67, 64]);
+  });
+
+  it("leaves chords of four or more notes alone under -4-", () => {
+    expect(arpSequence(seventh, { four: true })).toEqual(seventh);
+    expect(arpSequence([48, ...seventh], { four: true })).toHaveLength(5);
+  });
+
+  it("shuffles into a real permutation of the chord", () => {
+    const rand = lcg(37);
+    for (let k = 0; k < 50; k++) {
+      const s = arpSequence(seventh, { order: "random" }, rand);
+      expect([...s].sort((a, b) => a - b)).toEqual(seventh);
+    }
+  });
+
+  it("actually varies the order when random", () => {
+    const rand = lcg(11);
+    const seen = new Set();
+    for (let k = 0; k < 60; k++) seen.add(arpSequence(triad, { order: "random" }, rand).join());
+    expect(seen.size).toBe(6); // all 3! orders turn up
+  });
+
+  it("repeats the second note played when random and -4- together", () => {
+    const s = arpSequence(triad, { order: "random", four: true }, seq(0.9, 0.1));
+    expect(s).toHaveLength(4);
+    expect(s[3]).toBe(s[1]);
+  });
+
+  it("is a pure function of its inputs, and leaves the chord untouched", () => {
+    const chord = [...triad];
+    const a = arpSequence(chord, { order: "random", four: true }, seq(0.2, 0.7));
+    const b = arpSequence(chord, { order: "random", four: true }, seq(0.2, 0.7));
+    expect(a).toEqual(b);
+    expect(chord).toEqual(triad);
+  });
+
+  it("plays a single note as itself", () => {
+    expect(arpSequence([60], { four: true, order: "random" })).toEqual([60]);
+  });
+});
+
+describe("chord events", () => {
+  const triad = [60, 64, 67];
+  const B = 48; // a C bass
+  const still = { dynamics: 0.5, humanise: 0 }; // no timing scatter, so times are exact
+  const opts = (o) => ({ dur: 1.1, span: 1.25, sound: still, ...o });
+  const shape = (evs) => evs.map((e) => `${e.midi}@${+e.at.toFixed(4)}/${+e.dur.toFixed(4)}`);
+
+  it("plays a block chord all at once, bass included", () => {
+    const ev = chordEvents(triad, B, opts({}));
+    expect(ev.map((e) => e.midi)).toEqual([48, 60, 64, 67]);
+    expect(ev.every((e) => e.at === 0 && e.dur === 1.1)).toBe(true);
+  });
+
+  it("spreads an arpeggio evenly across the whole span", () => {
+    expect(shape(chordEvents(triad, null, opts({ arp: true })))).toEqual([
+      "60@0/0.375", "64@0.4167/0.375", "67@0.8333/0.375",
+    ]);
+  });
+
+  it("-4- with the bass in the arp: B 1 3 5", () => {
+    const ev = chordEvents(triad, B, opts({ arp: true, four: true }));
+    expect(ev.map((e) => e.midi)).toEqual([48, 60, 64, 67]);
+    expect(ev.map((e) => +e.at.toFixed(4))).toEqual([0, 0.3125, 0.625, 0.9375]);
+  });
+
+  it("-4- with the bass held: a whole-slot bass under 1 3 5 3", () => {
+    const ev = chordEvents(triad, B, opts({ arp: true, four: true, holdBass: true }));
+    expect(shape(ev)).toEqual([
+      "48@0/1.1",
+      "60@0/0.2813", "64@0.3125/0.2813", "67@0.625/0.2813", "64@0.9375/0.2813",
+    ]);
+  });
+
+  it("holds the bass out of a random order too", () => {
+    for (let k = 0; k < 20; k++) {
+      const ev = chordEvents(triad, B, opts({ arp: true, holdBass: true, order: "random" }));
+      expect(ev[0]).toMatchObject({ midi: 48, at: 0, dur: 1.1 });
+      expect(ev.slice(1).map((e) => e.midi).sort()).toEqual(triad);
+    }
+  });
+
+  it("ignores holdBass when there is no bass voice", () => {
+    const a = chordEvents(triad, null, opts({ arp: true, four: true, holdBass: true }));
+    expect(a.map((e) => e.midi)).toEqual([60, 64, 67, 64]);
+  });
+
+  it("finds the bass by being told, not by being lowest", () => {
+    // an inverted upper voice below the bass: the held note is still the bass
+    const ev = chordEvents([45, 64, 67], 48, opts({ arp: true, holdBass: true }));
+    expect(ev[0].midi).toBe(48);
+    expect(ev.slice(1).map((e) => e.midi)).toEqual([45, 64, 67]);
+  });
+
+  it("keeps the bass's weight whether it's held or in the arp", () => {
+    const loud = { dynamics: 1, humanise: 0 };
+    const held = chordEvents(triad, B, { arp: true, holdBass: true, sound: loud });
+    const inArp = chordEvents(triad, B, { arp: true, sound: loud });
+    const bassVel = (ev) => ev.find((e) => e.midi === B).velocity;
+    expect(bassVel(held)).toBe(bassVel(inArp));
+    expect(bassVel(held)).toBeGreaterThan(held.find((e) => e.midi === 64).velocity);
   });
 });

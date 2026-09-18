@@ -325,3 +325,72 @@ export function velocityCurve(midi, sound = {}, rand = Math.random) {
     return { velocity, delay: tJitter * 0.014 * humanise };
   });
 }
+
+// ------------------------------------------------------------------------
+//  ARPEGGIO
+// ------------------------------------------------------------------------
+// The order an arpeggio plays a chord in: one note per step, the steps spread
+// evenly over the chord's slot (the timing is the caller's job). `midi` must be
+// ascending. `order` is "rise" (low to high) or "random" — a fresh shuffle
+// every time the chord plays, so a loop never repeats itself exactly.
+//
+// `four` pads a three-note chord to four steps by coming back to the second
+// note played — 1 3 5 3 when rising — so triads and seventh chords take the
+// same four steps and the rhythm doesn't lurch between threes and fours.
+// Chords of four or more notes play as they are. `rand` is injected, the same
+// bargain velocityCurve makes.
+export function arpSequence(midi, { four = false, order = "rise" } = {}, rand = Math.random) {
+  const seq = [...midi];
+  if (order === "random") {
+    // Fisher–Yates: every order equally likely, n−1 draws
+    for (let i = seq.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [seq[i], seq[j]] = [seq[j], seq[i]];
+    }
+  }
+  if (four && seq.length === 3) seq.push(seq[1]);
+  return seq;
+}
+
+// ------------------------------------------------------------------------
+//  WHAT A CHORD PLAYS
+// ------------------------------------------------------------------------
+// A realised chord in, a list of note events out — { midi, at, dur, velocity },
+// `at` in seconds from the chord's start — for the built-in synth and the MIDI
+// port alike. Pure, `rand` injected: it feeds both the humanise scatter and a
+// random arpeggio order.
+//
+// `upper` is the chord's voicing; `bass` is the bass voice's note, or null when
+// that's off. Passed separately rather than as the lowest note, because it's
+// not guaranteed to be the lowest: an inversion can roll an upper voice down
+// past it.
+//
+//   block chord   every note at once, for `dur`
+//   arpeggio      one note per step, the steps spread evenly over `span` (the
+//                 whole slot in playback, so the last step runs straight into
+//                 the next chord), each gated to 0.9 of its step — the
+//                 envelope's release rings on past it
+//   holdBass      with an arpeggio: the bass sounds for the whole of `dur`
+//                 under an arpeggio of the upper voices, instead of being the
+//                 arpeggio's first step. So with -4-, a triad over a bass is
+//                 either B 1 3 5 (in the arp) or 1 3 5 3 over a held B.
+export function chordEvents(upper, bass, opts = {}, rand = Math.random) {
+  const {
+    arp = false, four = false, order = "rise", holdBass = false,
+    dur = 1.1, span = dur, sound = {},
+  } = opts;
+  const all = (bass == null ? [...upper] : [bass, ...upper]).sort((a, b) => a - b);
+  // shaped over the whole chord, so the bass keeps the bass's weight either way
+  const shaped = velocityCurve(all, sound, rand);
+  const feel = (m) => shaped[all.indexOf(m)];
+  const note = (m, at, d) => ({ midi: m, at: at + feel(m).delay, dur: d, velocity: feel(m).velocity });
+
+  if (!arp || all.length < 2) return all.map((m) => note(m, 0, dur));
+
+  const held = holdBass && bass != null;
+  const pool = held ? [...upper].sort((a, b) => a - b) : all;
+  const seq = arpSequence(pool, { four, order }, rand);
+  const step = span / seq.length;
+  const events = seq.map((m, k) => note(m, k * step, step * 0.9));
+  return held ? [note(bass, 0, dur), ...events] : events;
+}

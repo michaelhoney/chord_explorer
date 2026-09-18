@@ -60,6 +60,14 @@ enriches the diatonic chords (V becomes V7, etc.). **Tempo** controls playback s
 **Loop** makes Play repeat the progression until you press Stop — both apply to a run
 already in progress.
 
+**Arpeggio** plays each chord one note at a time, the notes spread evenly across the chord's
+beats so the line runs straight on into the next chord. **-4-** gives a three-note chord a
+fourth step by coming back to its middle note (1 3 5 3), so every chord keeps the same
+rhythm; **rise** plays low to high, **random** shuffles the order afresh each time. With
+**Bass** on, **hold bass** chooses where the bass goes: off, it's the arpeggio's first note
+(bass, 1, 3, 5); on, it holds for the whole chord while the arpeggio runs over it (1 3 5 3
+above a held bass).
+
 **Output** sends the notes to an external instrument instead of the built-in synth. Click
 *Enable MIDI* and allow the permission — it switches to the first port it finds, and the
 dropdown lets you pick another; switching output mid-run moves the

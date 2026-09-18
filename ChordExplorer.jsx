@@ -37,7 +37,7 @@ import {
   isDefaultSound,
   oscType,
   lfoRange,
-  velocityCurve,
+  chordEvents,
 } from "./synth.js";
 
 /* ------------------------------------------------------------------ *
@@ -207,7 +207,6 @@ function useSynth(sound) {
 // the UI, rather than leaving a control that silently does nothing.
 const MIDI_SUPPORTED = typeof navigator?.requestMIDIAccess === "function";
 const CH = 0; // channel 1
-const VELOCITY = 0x64;
 
 function useMidiOut() {
   const [status, setStatus] = useState(() =>
@@ -242,22 +241,21 @@ function useMidiOut() {
   const port = access.current?.outputs.get(portId) || null;
 
   const send = useCallback(
-    (midi, dur, at, stagger = 0, shaped = null) => {
+    (events, at) => {
       if (!port) return;
       // Tone schedules on the audio clock; output.send wants a performance.now()
       // stamp, so rebase one onto the other. Both are ms-stable, which is all
       // chord playback needs.
       const t0 = performance.now() + (at - Tone.getContext().currentTime) * 1000;
-      // midi arrives already sorted ascending, so `shaped` lines up with it —
-      // Dynamics and Humanise are about how a chord is *played*, so they travel
-      // out the port too. Everything else in the Sound panel is timbre, which
-      // belongs to whatever instrument is on the other end.
-      midi.forEach((m, i) => {
-        const on = t0 + i * stagger * 1000 + (shaped ? shaped[i].delay * 1000 : 0);
-        const vel = shaped ? Math.max(1, Math.round(shaped[i].velocity * 127)) : VELOCITY;
-        port.send([0x90 | CH, m, vel], on);
-        port.send([0x80 | CH, m, 0], t0 + dur * 1000);
-      });
+      // the same events the built-in synth plays (see playVoiced) — so the
+      // arpeggio, Dynamics and Humanise all travel out the port. Everything
+      // else in the Sound panel is timbre, which belongs to whatever instrument
+      // is on the other end.
+      for (const e of events) {
+        const vel = Math.max(1, Math.round(e.velocity * 127));
+        port.send([0x90 | CH, e.midi, vel], t0 + e.at * 1000);
+        port.send([0x80 | CH, e.midi, 0], t0 + (e.at + e.dur) * 1000);
+      }
     },
     [port]
   );
@@ -347,6 +345,9 @@ function encodeState(s) {
   if (!s.voiceLead) p.set("vl", "0"); // on by default; only record when turned off
   if (s.bass) p.set("bs", "1");
   if (s.arp) p.set("arp", "1");
+  if (s.arpFour) p.set("a4", "1");
+  if (s.arpOrder === "random") p.set("ao", "rnd");
+  if (s.holdBass) p.set("bh", "1");
   if (s.loop) p.set("lp", "1");
   if (s.susOn) p.set("su", "1");
   if (s.tempo !== 96) p.set("t", s.tempo);
@@ -382,6 +383,9 @@ function decodeState(search) {
   const voiceLead = p.get("vl") !== "0"; // default on; also honours legacy vl=1
   const bass = p.get("bs") === "1";
   const arp = p.get("arp") === "1";
+  const arpFour = p.get("a4") === "1";
+  const arpOrder = p.get("ao") === "rnd" ? "random" : "rise";
+  const holdBass = p.get("bh") === "1";
   const loop = p.get("lp") === "1";
   const susOn = p.get("su") === "1";
   const tempo = clampNum(p.get("t"), 96, 60, 140);
@@ -413,7 +417,7 @@ function decodeState(search) {
   // decorated through the engine, so a reconstituted chord carries exactly the
   // fields a chosen or suggested one does
   const chain = decorateChain(prog, mode).map((c, i) => ({ ...c, id: i + 1 }));
-  return { root, mode, add7, voiceLead, bass, arp, loop, susOn, tempo, sound, prog: chain };
+  return { root, mode, add7, voiceLead, bass, arp, arpFour, arpOrder, holdBass, loop, susOn, tempo, sound, prog: chain };
 }
 
 export default function ChordExplorer() {
@@ -424,6 +428,9 @@ export default function ChordExplorer() {
   const [voiceLead, setVoiceLead] = useState(boot.voiceLead ?? true);
   const [bassOn, setBassOn] = useState(boot.bass ?? false);
   const [arp, setArp] = useState(boot.arp ?? false);
+  const [arpFour, setArpFour] = useState(boot.arpFour ?? false);
+  const [arpOrder, setArpOrder] = useState(boot.arpOrder ?? "rise");
+  const [holdBass, setHoldBass] = useState(boot.holdBass ?? false);
   const [loop, setLoop] = useState(boot.loop ?? false);
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
   const [tempo, setTempo] = useState(boot.tempo ?? 96);
@@ -471,9 +478,9 @@ export default function ChordExplorer() {
   // out every render, and it's what Share copies — so a share never lags the
   // page, however recently something changed.
   const path = useMemo(() => {
-    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, loop, susOn, tempo, sound, prog });
+    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, arpFour, arpOrder, holdBass, loop, susOn, tempo, sound, prog });
     return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-  }, [root, mode, add7, voiceLead, bassOn, arp, loop, susOn, tempo, sound, prog]);
+  }, [root, mode, add7, voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, susOn, tempo, sound, prog]);
 
   // Written to the address bar behind a short debounce, not on every change. A
   // slider drag changes state every frame, and Safari allows 100 replaceState
@@ -553,45 +560,53 @@ export default function ChordExplorer() {
 
   // The bass voice, when it's on. Separate from `voicings` on purpose (see
   // bassLine): voicings stay the upper voices, which is what voice leading chains
-  // from and what every Δ measures, and `played` is what actually sounds.
+  // from and what every Δ measures. What gets *played* is `{ upper, bass }` —
+  // the bass named rather than folded in as the lowest note, because it isn't
+  // always the lowest (an inversion can roll an upper voice below it), and
+  // "hold bass" needs to know which note it is.
   const bass = useMemo(() => (bassOn ? bassLine(prog) : null), [bassOn, prog]);
   const played = useMemo(
-    () => (bass ? voicings.map((v, i) => [bass[i], ...v]) : voicings),
+    () => voicings.map((v, i) => ({ upper: v, bass: bass ? bass[i] : null })),
     [bass, voicings]
   );
   // a chord about to be added (preview, choose) gets the bass it would have
   const withBass = useCallback(
-    (midi, rootPc) =>
-      bassOn ? [bassNote(rootPc, bass && bass.length ? bass[bass.length - 1] : null), ...midi] : midi,
+    (midi, rootPc) => ({
+      upper: midi,
+      bass: bassOn ? bassNote(rootPc, bass && bass.length ? bass[bass.length - 1] : null) : null,
+    }),
     [bassOn, bass]
   );
 
   const playVoiced = useCallback(
-    async (midi, dur = 1.1, when) => {
+    // `chord` is `{ upper, bass }` (bass null when the bass voice is off). `span`
+    // is the time an arpeggio spreads over: the chord's whole slot during
+    // playback, so the last step runs straight into the next chord. Defaults to
+    // `dur` for one-off plays.
+    async (chord, dur = 1.1, when, span = dur) => {
       // ensure() even when routing to MIDI: the Transport and the clock that
       // timestamps the messages both need a running audio context
       const synth = await ensure();
       if (!synth) return; // no gesture yet: a hover, before any click
       const t = when ?? Tone.now();
-      // sorted once, here: inversion shifts leave midi unsorted, an arpeggio
-      // rolls upward, and velocityCurve reads the shape off pitch order
-      const sorted = [...midi].sort((a, b) => a - b);
-      const stagger = arp && sorted.length > 1 ? Math.min(dur * 0.22, 0.16) : 0;
-      const shaped = velocityCurve(sorted, soundRef.current);
+      // one list of note events for the synth and the MIDI port alike — block
+      // chord or arpeggio, bass held or in the arp, velocity and humanise all
+      // decided in one pure function (see chordEvents)
+      const events = chordEvents(chord.upper, chord.bass, {
+        arp, four: arpFour, order: arpOrder, holdBass, dur, span, sound: soundRef.current,
+      });
       if (midiActive) {
-        midiSend(sorted, dur, t, stagger, shaped);
+        midiSend(events, t);
         return; // the port replaces the built-in synth rather than doubling it
       }
       // note by note rather than one call with the whole chord: a block chord
       // with every voice at the same velocity is the organ sound, and per-note
-      // velocity is the difference. The stagger is zero unless Arpeggio is on,
-      // so this is the same single attack it always was.
-      midiToNotes(sorted).forEach((n, i) => {
-        const at = t + i * stagger + shaped[i].delay;
-        synth.triggerAttackRelease(n, dur - i * stagger, at, shaped[i].velocity);
-      });
+      // velocity is the difference
+      for (const e of events) {
+        synth.triggerAttackRelease(midiToNotes([e.midi])[0], e.dur, t + e.at, e.velocity);
+      }
     },
-    [ensure, arp, midiActive, midiSend]
+    [ensure, arp, arpFour, arpOrder, holdBass, midiActive, midiSend]
   );
 
   const preview = useCallback(
@@ -710,7 +725,8 @@ export default function ChordExplorer() {
         // keep the playVoiced it was built with, so switching MIDI output or
         // toggling Arpeggio mid-run would go nowhere until the next Play
         // duration read at fire time, so a tempo change lands on the next chord
-        playVoicedRef.current(played[i], Tone.Time(atBeat(STEP)).toSeconds() * 0.92, time);
+        const slot = Tone.Time(atBeat(STEP)).toSeconds();
+        playVoicedRef.current(played[i], slot * 0.92, time, slot);
         Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
       }, atBeat(i * STEP));
     });
@@ -875,11 +891,11 @@ export default function ChordExplorer() {
       );
       if (voicings[i]) {
         const upper = applyInversion(voicings[i], dir);
-        if (!bassOn) return playVoiced(upper, 0.8);
+        if (!bassOn) return playVoiced({ upper, bass: null }, 0.8);
         // the arrows walk the bass through the chord tones too (see bassPcOf);
         // its octave depends on the chord before, so read it off the new line
         const edited = prog.map((c, j) => (j === i ? { ...c, inv: (c.inv || 0) + dir } : c));
-        playVoiced([bassLine(edited)[i], ...upper], 0.8);
+        playVoiced({ upper, bass: bassLine(edited)[i] }, 0.8);
       }
     },
     [voicings, bassOn, prog, playVoiced]
@@ -1028,14 +1044,52 @@ export default function ChordExplorer() {
             Bass
           </button>
 
-          <button
-            className={"ce-toggle" + (arp ? " on" : "")}
-            aria-pressed={arp}
-            onClick={() => setArp((v) => !v)}
-            title="Roll each chord's notes up one at a time instead of playing them together"
-          >
-            Arpeggio
-          </button>
+          {/* Arpeggio and what shapes it, kept together so they wrap as one.
+              Provisional layout — this is due a design pass. */}
+          <span className="ce-arp">
+            <button
+              className={"ce-toggle" + (arp ? " on" : "")}
+              aria-pressed={arp}
+              onClick={() => setArp((v) => !v)}
+              title="Play each chord one note at a time, spread evenly across its slot"
+            >
+              Arpeggio
+            </button>
+            <button
+              className={"ce-toggle" + (arpFour ? " on" : "")}
+              aria-pressed={arpFour}
+              disabled={!arp}
+              onClick={() => setArpFour((v) => !v)}
+              title="Four steps per chord: a three-note chord plays 1 3 5 3, so every chord keeps the same rhythm"
+            >
+              -4-
+            </button>
+            <span className="ce-seg" role="group" aria-label="Arpeggio order">
+              {[["rise", "Low to high"], ["random", "A new random order each time the chord plays"]].map(([o, hint]) => (
+                <button
+                  key={o}
+                  className={arpOrder === o ? "on" : ""}
+                  aria-pressed={arpOrder === o}
+                  disabled={!arp}
+                  title={hint}
+                  onClick={() => setArpOrder(o)}
+                >
+                  {o}
+                </button>
+              ))}
+            </span>
+            <button
+              className={"ce-toggle" + (holdBass ? " on" : "")}
+              aria-pressed={holdBass}
+              disabled={!arp || !bassOn}
+              onClick={() => setHoldBass((v) => !v)}
+              title={bassOn
+                ? "Hold the bass for the whole chord under the arpeggio, instead of playing it as the arpeggio's first step"
+                : "Holds the bass under the arpeggio — turn Bass on to use it"}
+            >
+              hold bass
+            </button>
+          </span>
 
           <button
             className={"ce-toggle" + (loop ? " on" : "")}
@@ -1167,7 +1221,7 @@ export default function ChordExplorer() {
                 dragIdx={dragIdx}
                 dragMoved={dragMoved}
                 onPlay={(i) => playVoiced(played[i])}
-                onPlayNote={(m) => playVoiced([m])}
+                onPlayNote={(m) => playVoiced({ upper: [m], bass: null })}
                 onInvert={invert}
                 onRemove={removeChord}
                 onDragStart={onDragStart}
@@ -1781,6 +1835,9 @@ const CSS = `
 }
 .ce-toggle.on{background:var(--ink); color:var(--panel); border-color:var(--ink);}
 .ce-midi{align-self:auto;} /* sits under a field label, not flush with the toggle row */
+.ce-arp{display:inline-flex; gap:6px; align-items:stretch; align-self:flex-end;}
+.ce-arp .ce-toggle{align-self:auto;}
+.ce-arp button:disabled{opacity:.4; cursor:default;}
 .ce-midi:disabled{opacity:.5; cursor:default;}
 
 /* --- the sound concertina -------------------------------------------------

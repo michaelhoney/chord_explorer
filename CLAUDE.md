@@ -97,7 +97,7 @@ The engine, reading top to bottom:
   previous chord's notes, and a bass note among them would drag new tones down towards it. So
   the component keeps `voicings` as the upper voices — what voice leading chains from and
   what every Δ measures (the bass's motion is root motion, which the copy already names) —
-  and derives `played = [bass[i], ...voicings[i]]` for what actually sounds. The bass goes on
+  and derives `played[i] = { upper: voicings[i], bass: bass[i] }` for what actually sounds. The bass goes on
   after inversions. **`bassPcOf(chord)`** picks which chord tone it is: the root, until the
   tile's ▲/▼ say otherwise — the same `inv` that rolls the upper voices walks the bass through
   the chord tones (+1 the 3rd, +2 the 5th, −1 the top tone, wrapping), so one press re-voices
@@ -214,8 +214,14 @@ The engine, reading top to bottom:
   the result. `rand` is **injected**, the same bargain `suggestLoop` makes, and it draws the
   same number of times whatever Humanise is, so turning it down doesn't reshuffle which note
   gets which wobble. This is why `playVoiced` triggers **note by note** rather than handing
-  `triggerAttackRelease` the whole chord — per-note velocity needs per-note calls. The
-  stagger is zero unless Arpeggio is on, so it's the same single attack it always was.
+  `triggerAttackRelease` the whole chord — per-note velocity needs per-note calls.
+  `playVoiced` hands the same **list of note events** (pitch, onset, length, velocity) to the
+  synth or the MIDI port, so the two can't drift apart. The list comes from **`chordEvents
+  (upper, bass, opts, rand)`** in `synth.js` — pure, so block chord vs arpeggio, the arp order,
+  `-4-`, hold bass, velocity and humanise are all decided in one tested place. Chords travel
+  through the component as **`{ upper, bass }`**, the bass named rather than folded in as the
+  lowest note: it isn't always the lowest (an inversion can roll an upper voice under it), and
+  hold bass has to know which note it is.
   Dynamics and Humanise are about how a chord is *played* rather than how it sounds, so they
   go out the **MIDI port too**; everything else in the panel is timbre, which belongs to
   whatever instrument is on the other end.
@@ -256,9 +262,22 @@ The engine, reading top to bottom:
   in that effect would stop playback the instant it started. Editing the progression (or the
   key) stops playback, since the schedule is built against a specific `voicings`.
 - **Component + `FutureList` / `FutureRow` + `PianoRoll`** — state is `root, mode, add7,
-  voiceLead, bassOn, arp, loop, tempo, prog, playingIdx, playing`, plus `exiting` / `spawn` for the
-  choose choreography. `arp` (Arpeggio toggle) makes `playVoiced` roll a chord's notes
-  up with staggered onsets that hold to the end of the slot, instead of one block attack. `PianoRoll` renders the progression as columns where each voice sits at
+  voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, tempo, prog, playingIdx, playing`, plus `exiting` / `spawn` for the
+  choose choreography. **Arpeggio** makes `playVoiced` play one note per step, the steps
+  spread evenly across the chord's slot (`span` — the whole slot in playback, so the last step
+  runs straight into the next chord), each note gated to 0.9 of its step with the envelope's
+  release ringing on. It used to be a strum — 0.16s-apart onsets held to the end of the slot —
+  which left a triad finished in a third of a second and then silent: the "pause after the
+  third note". The order comes from **`arpSequence`** in `synth.js`, pure with `rand`
+  injected: `arpOrder` is `rise` or `random` (a fresh Fisher–Yates shuffle each time the chord
+  plays), and **`-4-`** (`arpFour`) pads a three-note chord to four steps by returning to the
+  second note played — 1 3 5 3 rising — so triads and sevenths keep the same rhythm. Chords of
+  four or more notes play as they are. **hold bass** (`holdBass`, needs Bass on) decides where
+  the bass voice goes: off, it's the arpeggio's first step — so with -4- a triad over a bass
+  plays B 1 3 5; on, it sounds for the chord's whole `dur` under an arpeggio of the upper
+  voices — 1 3 5 3 over a held B. URL: `a4=1`, `ao=rnd`, `bh=1`. The -4-, order and hold-bass
+  controls sit with Arpeggio in `.ce-arp`, disabled while they can't apply — a provisional
+  layout, due a design pass (it already pushes Sound onto a second row at ~800px). `PianoRoll` renders the progression as columns where each voice sits at
   its pitch height (`top = (max - midi) * ROW`), so common tones line up across columns and
   voice leading is visible; a note common with the previous chord gets a `held` style. A
   behind-the-columns SVG draws faint **connectors** pairing voices by ascending pitch across
