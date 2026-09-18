@@ -52,7 +52,7 @@ it falls back to system fonts and still works.
 
 The controls are grouped by what they act on: **chord population** on the left of the
 header (key, mode, 7ths, Sus, Suggest), **playback preferences** on the right
-(voice-leading, arpeggio, loop, output, tempo), and **transport and editing** down with the
+(voice-leading, bass, arpeggio, loop, output, tempo), and **transport and editing** down with the
 progression itself. The share icon at the top right copies a link to whatever you have.
 
 Set a **key** and **major/minor**, then click any chord to start. The **7ths** toggle
@@ -149,6 +149,14 @@ actually behaves. The weak natural v stays in-key and honest about being weak.
 Voice-leading is on by default: each chord's tones are placed nearest the previous
 chord's, so common tones hold and the rest step. Turn it off to hear plain root
 position.
+
+**Bass** adds each chord's root underneath, down where a bass player would put it. It takes
+whichever octave is nearest the last bass note, so it walks like a bass line rather than
+jumping around, and it gets its own lane under the piano roll. With it on, a tile's **▲/▼**
+move the bass through the chord's tones as well as re-voicing the chord — ▲ on C gives C/E,
+then C/G — so a line like C · G/B · Am is two clicks away. The voice-leading and the Δ
+numbers stay about the upper voices; the bass's movement is the root motion the descriptions
+already name.
 
 ## Roadmap, roughly in order of fun
 

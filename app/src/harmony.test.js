@@ -11,6 +11,11 @@ import {
   voiceLeadMidi,
   applyInversion,
   computeVoicings,
+  bassNote,
+  bassLine,
+  bassPcOf,
+  BASS_LOW,
+  BASS_HIGH,
   voicingDistance,
   voiceSteps,
   optionDistance,
@@ -418,5 +423,78 @@ describe("suggestLoop", () => {
         }
       }
     }
+  });
+});
+
+describe("bass voice", () => {
+  const key = buildKey(0, "major");
+  const [I, , , IV, V, vi] = key.diatonic; // C, F, G, Am
+
+  it("plays the chord's root", () => {
+    for (const c of [I, IV, V, vi]) {
+      expect(bassNote(c.rootPc, null) % 12).toBe(c.rootPc);
+    }
+  });
+
+  it("stays inside its window, whatever it's asked for", () => {
+    for (let pc = 0; pc < 12; pc++) {
+      for (const prev of [null, BASS_LOW, BASS_HIGH, 20, 90]) {
+        const m = bassNote(pc, prev);
+        expect(m).toBeGreaterThanOrEqual(BASS_LOW);
+        expect(m).toBeLessThanOrEqual(BASS_HIGH);
+      }
+    }
+  });
+
+  it("moves to the nearest octave, like a bass line", () => {
+    // G2 (43) to C: up a fourth to C3 (48), not down a fifth to C2 (36 — out of range anyway)
+    expect(bassNote(0, 43)).toBe(48);
+    // C3 (48) to B: down a semitone to B2 (47), not up to B3
+    expect(bassNote(11, 48)).toBe(47);
+  });
+
+  it("chains a progression, never leaping more than a tritone", () => {
+    const prog = [I, vi, IV, V, I, V, vi, IV];
+    const line = bassLine(prog);
+    expect(line).toHaveLength(prog.length);
+    line.forEach((m, i) => expect(m % 12).toBe(prog[i].rootPc));
+    for (let i = 1; i < line.length; i++) {
+      expect(Math.abs(line[i] - line[i - 1])).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it("sits below the voicings it goes under", () => {
+    const prog = [I, vi, IV, V];
+    const line = bassLine(prog);
+    for (const vl of [true, false]) {
+      computeVoicings(prog, vl).forEach((v, i) => {
+        expect(line[i]).toBeLessThan(Math.min(...v));
+      });
+    }
+  });
+
+  it("walks the bass through the chord tones with the inversion arrows", () => {
+    // C major: C E G — +1 is the 3rd, +2 the 5th, +3 wraps to the root
+    expect(bassPcOf({ ...I, inv: 0 })).toBe(0);
+    expect(bassPcOf({ ...I, inv: 1 })).toBe(4);
+    expect(bassPcOf({ ...I, inv: 2 })).toBe(7);
+    expect(bassPcOf({ ...I, inv: 3 })).toBe(0);
+    // down from the root lands on the top tone
+    expect(bassPcOf({ ...I, inv: -1 })).toBe(7);
+    // a seventh chord's top tone is the 7th: G7 down one is F in the bass
+    const V7 = resolveKey(0, "major", true).diatonic[4];
+    expect(bassPcOf({ ...V7, inv: -1 })).toBe(5);
+  });
+
+  it("puts an inverted chord's chosen tone in the bass line", () => {
+    const line = bassLine([I, { ...V, inv: 1 }, I]); // C  G/B  C
+    expect(line[1] % 12).toBe(11);
+    expect(Math.abs(line[1] - line[0])).toBe(1); // C down to B: the classic step
+  });
+
+  it("is a pure function of the progression", () => {
+    const prog = [I, IV, V, I];
+    expect(bassLine(prog)).toEqual(bassLine(prog));
+    expect(bassLine([])).toEqual([]);
   });
 });

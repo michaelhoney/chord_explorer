@@ -14,6 +14,8 @@ import {
   voicingDistance,
   voiceSteps,
   optionDistance,
+  bassNote,
+  bassLine,
   bassNameOf,
   resolveKey,
   suspensionsFor,
@@ -343,6 +345,7 @@ function encodeState(s) {
   else if (s.mode === "mixolydian") p.set("m", "mixo");
   if (s.add7) p.set("s7", "1");
   if (!s.voiceLead) p.set("vl", "0"); // on by default; only record when turned off
+  if (s.bass) p.set("bs", "1");
   if (s.arp) p.set("arp", "1");
   if (s.loop) p.set("lp", "1");
   if (s.susOn) p.set("su", "1");
@@ -377,6 +380,7 @@ function decodeState(search) {
   const mode = p.get("m") === "min" ? "minor" : p.get("m") === "mixo" ? "mixolydian" : "major";
   const add7 = p.get("s7") === "1";
   const voiceLead = p.get("vl") !== "0"; // default on; also honours legacy vl=1
+  const bass = p.get("bs") === "1";
   const arp = p.get("arp") === "1";
   const loop = p.get("lp") === "1";
   const susOn = p.get("su") === "1";
@@ -409,7 +413,7 @@ function decodeState(search) {
   // decorated through the engine, so a reconstituted chord carries exactly the
   // fields a chosen or suggested one does
   const chain = decorateChain(prog, mode).map((c, i) => ({ ...c, id: i + 1 }));
-  return { root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog: chain };
+  return { root, mode, add7, voiceLead, bass, arp, loop, susOn, tempo, sound, prog: chain };
 }
 
 export default function ChordExplorer() {
@@ -418,6 +422,7 @@ export default function ChordExplorer() {
   const [mode, setMode] = useState(boot.mode ?? "major");
   const [add7, setAdd7] = useState(boot.add7 ?? false);
   const [voiceLead, setVoiceLead] = useState(boot.voiceLead ?? true);
+  const [bassOn, setBassOn] = useState(boot.bass ?? false);
   const [arp, setArp] = useState(boot.arp ?? false);
   const [loop, setLoop] = useState(boot.loop ?? false);
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
@@ -466,9 +471,9 @@ export default function ChordExplorer() {
   // out every render, and it's what Share copies — so a share never lags the
   // page, however recently something changed.
   const path = useMemo(() => {
-    const qs = encodeState({ root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog });
+    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, loop, susOn, tempo, sound, prog });
     return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-  }, [root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog]);
+  }, [root, mode, add7, voiceLead, bassOn, arp, loop, susOn, tempo, sound, prog]);
 
   // Written to the address bar behind a short debounce, not on every change. A
   // slider drag changes state every frame, and Safari allows 100 replaceState
@@ -546,6 +551,21 @@ export default function ChordExplorer() {
   // the current chord's realised voicing — the "from" point for chooser distances
   const fromMidi = voicings.length ? voicings[voicings.length - 1] : null;
 
+  // The bass voice, when it's on. Separate from `voicings` on purpose (see
+  // bassLine): voicings stay the upper voices, which is what voice leading chains
+  // from and what every Δ measures, and `played` is what actually sounds.
+  const bass = useMemo(() => (bassOn ? bassLine(prog) : null), [bassOn, prog]);
+  const played = useMemo(
+    () => (bass ? voicings.map((v, i) => [bass[i], ...v]) : voicings),
+    [bass, voicings]
+  );
+  // a chord about to be added (preview, choose) gets the bass it would have
+  const withBass = useCallback(
+    (midi, rootPc) =>
+      bassOn ? [bassNote(rootPc, bass && bass.length ? bass[bass.length - 1] : null), ...midi] : midi,
+    [bassOn, bass]
+  );
+
   const playVoiced = useCallback(
     async (midi, dur = 1.1, when) => {
       // ensure() even when routing to MIDI: the Transport and the clock that
@@ -579,9 +599,9 @@ export default function ChordExplorer() {
       // taste the chord without committing it — same voicing choose would use
       const prevMidi = voiceLead && voicings.length ? voicings[voicings.length - 1] : null;
       const midi = voiceLead ? voiceLeadMidi(prevMidi, opt) : rootPositionMidi(opt);
-      playVoiced(midi, 0.8);
+      playVoiced(withBass(midi, opt.rootPc), 0.8);
     },
-    [voiceLead, voicings, playVoiced]
+    [voiceLead, voicings, playVoiced, withBass]
   );
 
   // you can't design a sound you can't hear: releasing a slider plays the chord
@@ -589,8 +609,12 @@ export default function ChordExplorer() {
   // playback runs, which is already demonstrating the change as you make it.
   const auditionSound = useCallback(() => {
     if (playingRef.current) return;
-    playVoiced(fromMidi ?? rootPositionMidi(key.diatonic[0]), 1.5);
-  }, [fromMidi, key, playVoiced]);
+    const tonic = key.diatonic[0];
+    playVoiced(
+      played.length ? played[played.length - 1] : withBass(rootPositionMidi(tonic), tonic.rootPc),
+      1.5
+    );
+  }, [played, key, playVoiced, withBass]);
 
   const choose = useCallback(
     async (opt, rowEl) => {
@@ -610,7 +634,7 @@ export default function ChordExplorer() {
         flight.current = null;
       }
       setExiting(optKey(opt));
-      playVoiced(midi); // sound lands on the click, not after the animation
+      playVoiced(withBass(midi, opt.rootPc)); // sound lands on the click, not after the animation
       timers.current.push(
         setTimeout(() => {
           setProg((p) => [...p, { ...opt, id: ++uid.current }]);
@@ -623,7 +647,7 @@ export default function ChordExplorer() {
       );
       timers.current.push(setTimeout(() => setSpawn(null), EXIT_MS + SPAWN_MS + 400));
     },
-    [exiting, voiceLead, voicings, playVoiced, prog.length]
+    [exiting, voiceLead, voicings, playVoiced, prog.length, withBass]
   );
 
   // keep the newest column parked against the futures list as the roll grows
@@ -686,7 +710,7 @@ export default function ChordExplorer() {
         // keep the playVoiced it was built with, so switching MIDI output or
         // toggling Arpeggio mid-run would go nowhere until the next Play
         // duration read at fire time, so a tempo change lands on the next chord
-        playVoicedRef.current(voicings[i], Tone.Time(atBeat(STEP)).toSeconds() * 0.92, time);
+        playVoicedRef.current(played[i], Tone.Time(atBeat(STEP)).toSeconds() * 0.92, time);
         Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
       }, atBeat(i * STEP));
     });
@@ -703,7 +727,7 @@ export default function ChordExplorer() {
     playingRef.current = true;
     setPlaying(true);
     t.start();
-  }, [prog, tempo, loop, ensure, voicings, stopPlayback]);
+  }, [prog, tempo, loop, ensure, played, stopPlayback]);
 
   // the toggles reach into a run already in progress
   useEffect(() => { Tone.getTransport().bpm.value = tempo; }, [tempo]);
@@ -726,7 +750,7 @@ export default function ChordExplorer() {
   // editing the progression invalidates what's scheduled against it
   useEffect(() => {
     if (playingRef.current) stopRef.current();
-  }, [prog, root, mode, add7, voiceLead]);
+  }, [prog, root, mode, add7, voiceLead, bassOn]);
   useEffect(() => () => stopRef.current(), []); // and stop on unmount, only
 
   // --- reordering and removing chords -------------------------------------
@@ -849,9 +873,16 @@ export default function ChordExplorer() {
       setProg((p) =>
         p.map((c, j) => (j === i ? { ...c, inv: (c.inv || 0) + dir } : c))
       );
-      if (voicings[i]) playVoiced(applyInversion(voicings[i], dir), 0.8);
+      if (voicings[i]) {
+        const upper = applyInversion(voicings[i], dir);
+        if (!bassOn) return playVoiced(upper, 0.8);
+        // the arrows walk the bass through the chord tones too (see bassPcOf);
+        // its octave depends on the chord before, so read it off the new line
+        const edited = prog.map((c, j) => (j === i ? { ...c, inv: (c.inv || 0) + dir } : c));
+        playVoiced([bassLine(edited)[i], ...upper], 0.8);
+      }
     },
-    [voicings, playVoiced]
+    [voicings, bassOn, prog, playVoiced]
   );
   const changeKey = (r, m) => { setRoot(r); setMode(m); setProg([]); setQuery(""); };
 
@@ -989,6 +1020,15 @@ export default function ChordExplorer() {
           </button>
 
           <button
+            className={"ce-toggle" + (bassOn ? " on" : "")}
+            aria-pressed={bassOn}
+            onClick={() => setBassOn((v) => !v)}
+            title="Add a bass voice under each chord: the root, unless a tile's arrows pick another chord tone. It moves to the nearest octave, like a bass line"
+          >
+            Bass
+          </button>
+
+          <button
             className={"ce-toggle" + (arp ? " on" : "")}
             aria-pressed={arp}
             onClick={() => setArp((v) => !v)}
@@ -1119,13 +1159,14 @@ export default function ChordExplorer() {
               <PianoRoll
                 prog={prog}
                 voicings={voicings}
+                bass={bass}
                 playingIdx={playingIdx}
                 keyRoot={key.root}
                 spawn={spawn}
                 colsRef={colsRef}
                 dragIdx={dragIdx}
                 dragMoved={dragMoved}
-                onPlay={(i) => playVoiced(voicings[i])}
+                onPlay={(i) => playVoiced(played[i])}
                 onPlayNote={(m) => playVoiced([m])}
                 onInvert={invert}
                 onRemove={removeChord}
@@ -1394,7 +1435,7 @@ function FutureRow({ opt, i, keyRoot, dist, state, onPick, onPreview }) {
 // piano-roll progression: each voice sits at its pitch height, so common tones
 // line up across columns and the voice leading is visible. Faint connectors trace
 // each voice from one chord to the next; the chord tile sits underneath.
-const ROLL = { ROW: 11, CELL: 18, COL: 84, GAP: 10 }; // px per semitone, pill, column, gap
+const ROLL = { ROW: 11, CELL: 18, COL: 84, GAP: 10, LANE: 16 }; // px per semitone, pill, column, gap, gap above the bass lane
 
 // semitone step as a sequencer would read it: +2, -3, 0 for a held voice
 const signed = (n) => (n > 0 ? `+${n}` : `${n}`);
@@ -1436,7 +1477,7 @@ const Chevron = ({ up }) => (
 );
 
 function PianoRoll({
-  prog, voicings, playingIdx, keyRoot, spawn, colsRef, dragIdx, dragMoved,
+  prog, voicings, bass, playingIdx, keyRoot, spawn, colsRef, dragIdx, dragMoved,
   onPlay, onPlayNote, onInvert, onRemove, onDragStart, onTileKey,
 }) {
   const { ROW, CELL, COL, GAP } = ROLL;
@@ -1450,6 +1491,17 @@ function PianoRoll({
   const cx = (i) => i * (COL + GAP) + COL / 2; // column centre
   const cy = (m) => topOf(m) + CELL / 2; // pill centre
 
+  // The bass voice gets its own lane under the chords rather than its true
+  // height: it sits an octave or two below them, and drawing that honestly would
+  // put a tall band of empty rows between the two. Pitch is still to scale
+  // *within* each lane; the dashed rule marks where the scale breaks.
+  const hasBass = !!(bass && bass.length);
+  const bMax = hasBass ? Math.max(...bass) : 0;
+  const bMin = hasBass ? Math.min(...bass) : 0;
+  const laneTop = bandH + ROLL.LANE;
+  const bassTop = (m) => laneTop + (bMax - m) * ROW;
+  const rollH = hasBass ? laneTop + (bMax - bMin) * ROW + CELL : bandH;
+
   // connectors: pair voices by ascending pitch order across adjacent chords
   const links = [];
   for (let i = 0; i < voicings.length - 1; i++) {
@@ -1460,12 +1512,25 @@ function PianoRoll({
         x1: cx(i), y1: cy(a[v]), x2: cx(i + 1), y2: cy(b[v]), held: a[v] === b[v],
       });
     }
+    if (hasBass) {
+      links.push({
+        x1: cx(i), y1: bassTop(bass[i]) + CELL / 2,
+        x2: cx(i + 1), y2: bassTop(bass[i + 1]) + CELL / 2,
+        held: bass[i] === bass[i + 1],
+      });
+    }
   }
 
   return (
     <div className="ce-roll-scroll">
       <div className="ce-roll-inner" style={{ width }}>
-        <svg className="ce-roll-links" width={width} height={bandH} aria-hidden="true">
+        <svg className="ce-roll-links" width={width} height={rollH} aria-hidden="true">
+          {hasBass && (
+            <line
+              className="ce-roll-lane"
+              x1={0} x2={width} y1={bandH + ROLL.LANE / 2} y2={bandH + ROLL.LANE / 2}
+            />
+          )}
           {links.map((l, k) => (
             <line
               key={k}
@@ -1481,8 +1546,11 @@ function PianoRoll({
             const born = spawn && spawn.idx === i;
             const prevSet = i > 0 ? new Set(voicings[i - 1]) : null;
             const rootName = nameOf(c.rootPc, keyRoot);
-            const bass = bassNameOf(midi, keyRoot);
-            const inverted = bass !== rootName;
+            // the slash names the lowest note you hear: the bass voice when it's on
+            // (the root, unless the arrows have walked it to another chord tone),
+            // otherwise the bottom of the voicing
+            const bassName = hasBass ? nameOf(mod12(bass[i]), keyRoot) : bassNameOf(midi, keyRoot);
+            const inverted = bassName !== rootName;
             const notes = chordNoteNames(c, keyRoot);
             // semitone travel from the previous chord (the connectors' total length)
             const dist = i > 0 ? voicingDistance(voicings[i - 1], midi) : null;
@@ -1498,7 +1566,7 @@ function PianoRoll({
                 }
                 style={{ "--c": HUE[hueOf(c.func)], width: COL }}
               >
-                <span className="ce-roll-notes" style={{ height: bandH }}>
+                <span className="ce-roll-notes" style={{ height: rollH }}>
                   {[...midi].sort((a, b) => a - b).map((m, v) => {
                     const step = steps ? steps.get(m) : undefined;
                     return (
@@ -1513,7 +1581,8 @@ function PianoRoll({
                         // --dx / --dy are measured after layout, in the parent
                         style={{
                           top: topOf(m),
-                          ...(born ? { animationDelay: `${v * 52}ms` } : null),
+                          // the bass lands first, so the chord builds upward
+                          ...(born ? { animationDelay: `${(v + (hasBass ? 1 : 0)) * 52}ms` } : null),
                         }}
                         onClick={() => onPlayNote(m)}
                         title={
@@ -1526,6 +1595,29 @@ function PianoRoll({
                       </button>
                     );
                   })}
+                  {hasBass && (() => {
+                    const m = bass[i];
+                    const step = i > 0 ? m - bass[i - 1] : null;
+                    return (
+                      <button
+                        type="button"
+                        className={
+                          "ce-roll-note bass" +
+                          (i > 0 && bass[i - 1] === m ? " held" : "") +
+                          (born ? " spawn" : "")
+                        }
+                        style={{ top: bassTop(m) }}
+                        onClick={() => onPlayNote(m)}
+                        title={
+                          `Play ${Tone.Frequency(m, "midi").toNote()} · bass` +
+                          (step == null ? "" : ` · ${stepTitle(step)}`)
+                        }
+                      >
+                        {nameOf(mod12(m), keyRoot)}
+                        {step != null && <span className="ce-roll-step">{signed(step)}</span>}
+                      </button>
+                    );
+                  })()}
                 </span>
                 <div className={"ce-roll-tilewrap" + (born ? " spawn" : "")}>
                   <button
@@ -1535,11 +1627,11 @@ function PianoRoll({
                     onClick={() => { if (!dragMoved()) onPlay(i); }}
                     onKeyDown={(e) => onTileKey(i, e)}
                     aria-label={`${c.name}, chord ${i + 1} of ${prog.length}. Alt with the arrow keys reorders, Delete removes.`}
-                    title={`${c.name}${inverted ? "/" + bass : ""} · ${notes.join(" ")} · ${c.move}\nDrag to reorder · Alt+← / Alt+→ · Delete to remove`}
+                    title={`${c.name}${inverted ? "/" + bassName : ""} · ${notes.join(" ")} · ${c.move}\nDrag to reorder · Alt+← / Alt+→ · Delete to remove`}
                   >
                     <span className="ce-chip-name">
                       {c.name}
-                      {inverted && <span className="ce-chip-slash">/{bass}</span>}
+                      {inverted && <span className="ce-chip-slash">/{bassName}</span>}
                     </span>
                     <span className="ce-chip-roman">{c.roman}</span>
                     {/* the first chord has nothing to measure from — hold the slot
@@ -1569,8 +1661,10 @@ function PianoRoll({
                       type="button"
                       className="ce-inv-btn"
                       onClick={() => onInvert(i, +1)}
-                      aria-label="Raise the lowest note an octave"
-                      title="Raise the lowest note an octave"
+                      aria-label={hasBass ? "Move the bass up a chord tone" : "Raise the lowest note an octave"}
+                      title={hasBass
+                        ? "Move the bass up a chord tone, and raise the lowest upper note an octave"
+                        : "Raise the lowest note an octave"}
                     >
                       <Chevron up />
                     </button>
@@ -1578,8 +1672,10 @@ function PianoRoll({
                       type="button"
                       className="ce-inv-btn"
                       onClick={() => onInvert(i, -1)}
-                      aria-label="Lower the highest note an octave"
-                      title="Lower the highest note an octave"
+                      aria-label={hasBass ? "Move the bass down a chord tone" : "Lower the highest note an octave"}
+                      title={hasBass
+                        ? "Move the bass down a chord tone, and lower the highest upper note an octave"
+                        : "Lower the highest note an octave"}
                     >
                       <Chevron />
                     </button>
@@ -1791,6 +1887,9 @@ const CSS = `
 .ce-roll-links{position:absolute; top:0; left:0; z-index:0; overflow:visible; pointer-events:none;}
 .ce-roll-link{stroke:var(--ink); stroke-width:1; opacity:.13;}
 .ce-roll-link.held{opacity:.24;}
+.ce-roll-lane{stroke:var(--ink); stroke-width:1; opacity:.18; stroke-dasharray:2 4;}
+/* the bass voice: same pill, heavier outline, so it reads as the floor under the chord */
+.ce-roll-note.bass{border-width:1.5px; border-color:color-mix(in srgb, var(--c) 70%, transparent); font-weight:600;}
 .ce-roll-cols{position:relative; z-index:1; display:flex; gap:10px; align-items:flex-start;}
 .ce-roll-col{--c:var(--home); flex:0 0 auto; display:flex; flex-direction:column; gap:9px;}
 .ce-roll-notes{position:relative; display:block; width:100%;}

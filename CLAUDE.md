@@ -89,6 +89,24 @@ The engine, reading top to bottom:
   the lowest note for slash-chord display; `voiceSteps(prev, next)` gives the per-voice
   semitone step between two realised chords, keyed by destination midi note (`G→A` is
   `+2`) — what the roll's pills label and what you'd dial into a chromatic sequencer.
+- **`bassNote(rootPc, prev)` / `bassLine(prog)`** — the optional **Bass** voice: each chord's
+  root, in the octave nearest the previous bass note, inside a fixed D2–F3 window
+  (`BASS_LOW`/`BASS_HIGH`) — so it moves like a bass line (G→C up a fourth) rather than
+  leaping a seventh whenever B goes to C, and small speakers still carry it. **Kept apart from
+  the voicings, never folded into them:** `voiceLeadMidi` places each new tone nearest the
+  previous chord's notes, and a bass note among them would drag new tones down towards it. So
+  the component keeps `voicings` as the upper voices — what voice leading chains from and
+  what every Δ measures (the bass's motion is root motion, which the copy already names) —
+  and derives `played = [bass[i], ...voicings[i]]` for what actually sounds. The bass goes on
+  after inversions. **`bassPcOf(chord)`** picks which chord tone it is: the root, until the
+  tile's ▲/▼ say otherwise — the same `inv` that rolls the upper voices walks the bass through
+  the chord tones (+1 the 3rd, +2 the 5th, −1 the top tone, wrapping), so one press re-voices
+  the chord *and* moves the bass, and nothing new goes in the URL. The tile's slash names the
+  bass voice when it's on, the bottom of the voicing when it's off. Note the two modes read
+  `inv` differently: with the bass on it counts chord tones **from the root**; with it off it
+  rolls **from wherever voice leading put the chord** — so the same presses can read G/B with
+  the bass and G/D without. Deliberate: forcing them to agree would mean overriding voice
+  leading in the bass-off mode.
 - **`resolveKey(root, mode, add7)`** — `buildKey`, restacked as sevenths when the 7ths
   toggle is on. Pure, so the URL decoder can rebuild the exact pool a shared progression was
   chosen from.
@@ -126,7 +144,7 @@ The engine, reading top to bottom:
   `resolution` flag.
 - **Controls are grouped by what they act on**, which is the layout's whole organising idea:
   `.ce-cgroup` one is **chord population** (key, mode, 7ths, Sus, Suggest) flush left;
-  `.ce-cgroup` two is **playback preferences** (voice-leading, arpeggio, loop, output, tempo)
+  `.ce-cgroup` two is **playback preferences** (voice-leading, bass, arpeggio, loop, output, tempo)
   pushed right; and **transport & edit** (play, undo, clear) lives down with the progression
   it acts on. Suggest belongs with the first group rather than the transport because it sets
   up material rather than editing what's there — the same reason changing key clears the
@@ -238,14 +256,16 @@ The engine, reading top to bottom:
   in that effect would stop playback the instant it started. Editing the progression (or the
   key) stops playback, since the schedule is built against a specific `voicings`.
 - **Component + `FutureList` / `FutureRow` + `PianoRoll`** — state is `root, mode, add7,
-  voiceLead, arp, loop, tempo, prog, playingIdx, playing`, plus `exiting` / `spawn` for the
+  voiceLead, bassOn, arp, loop, tempo, prog, playingIdx, playing`, plus `exiting` / `spawn` for the
   choose choreography. `arp` (Arpeggio toggle) makes `playVoiced` roll a chord's notes
   up with staggered onsets that hold to the end of the slot, instead of one block attack. `PianoRoll` renders the progression as columns where each voice sits at
   its pitch height (`top = (max - midi) * ROW`), so common tones line up across columns and
   voice leading is visible; a note common with the previous chord gets a `held` style. A
   behind-the-columns SVG draws faint **connectors** pairing voices by ascending pitch across
   adjacent chords (`held` = horizontal). Fixed `ROLL` geometry (`ROW/CELL/COL/GAP`) keeps the
-  SVG and the flex columns on the same coordinates. Each note pill is its own button (plays
+  SVG and the flex columns on the same coordinates. The bass voice gets its **own lane** under
+  the chords (`ROLL.LANE` gap, dashed rule) rather than its true height, which would open a
+  tall band of empty rows between the two; pitch is to scale within each lane. Each note pill is its own button (plays
   that single note via `onPlayNote`) and carries its **semitone step from the previous
   chord** at its right edge — voices paired by ascending pitch, the same pairing the
   connectors use, so a voice with no counterpart (a triad growing into a seventh) is
@@ -391,7 +411,8 @@ at full, bounded under any jitter, and a pure function of its inputs.
 [app/src/harmony.test.js](app/src/harmony.test.js) covers the engine: key building across
 all three modes, `classify`, colour chords and suspensions, `optionsFrom` ranking and
 cadence copy, and the voicing helpers (common-tone retention, inversion rolls,
-`computeVoicings` purity, `voiceSteps` pairing, midi→note conversion). Run it with
+`computeVoicings` purity, `voiceSteps` pairing, midi→note conversion), and the bass voice
+(root, window, nearest-octave motion, always under the voicings). Run it with
 `npm test` from `app/`. If a
 change alters harmonic behaviour, add or update an assertion rather than eyeballing the UI.
 

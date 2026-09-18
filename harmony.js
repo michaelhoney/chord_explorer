@@ -87,6 +87,7 @@ export function hueOf(func) {
 }
 
 export const mod12 = (n) => ((n % 12) + 12) % 12;
+const mod = (n, m) => ((n % m) + m) % m;
 
 // the distinct pitch classes of a chord, in chord-tone order (root, 3rd, 5th, 7th…)
 export function chordPitchClasses(chord) {
@@ -169,6 +170,51 @@ export function computeVoicings(prog, voiceLead) {
     }
   }
   return base.map((v, i) => applyInversion(v, prog[i].inv || 0));
+}
+
+// --- the bass voice ---------------------------------------------------------
+// An optional extra voice under the chord: its root, down where a bass player
+// would put it. Kept *apart* from the voicings above rather than folded into
+// them — voiceLeadMidi places each new tone nearest the previous chord's notes,
+// and a bass note among them would drag new tones down towards it. So the bass
+// is added after voice leading and inversions, and the Δ measures stay on the
+// upper voices: the bass's motion is root motion, which the copy already names.
+//
+// Each root takes the octave nearest the previous bass note, inside a fixed
+// window — so it moves like a bass line (G→C goes up a fourth) instead of
+// sitting in one octave and leaping a seventh whenever B goes to C. The window
+// is D2–F3: low enough to sound like a bass, high enough that small speakers
+// still carry it. Every pitch class has one or two octaves inside it.
+export const BASS_LOW = 38; // D2
+export const BASS_HIGH = 53; // F3
+const BASS_START = 45; // the first bass settles near A2
+
+export function bassNote(pc, prev) {
+  const target = prev ?? BASS_START;
+  let best = null;
+  for (let m = BASS_LOW; m <= BASS_HIGH; m++) {
+    if (mod12(m) !== mod12(pc)) continue;
+    // ties (a tritone either way) go to the lower octave: first found
+    if (best === null || Math.abs(m - target) < Math.abs(best - target)) best = m;
+  }
+  return best;
+}
+
+// Which chord tone is in the bass. The root, until the tile's arrows say
+// otherwise: the same `inv` that rolls the upper voices also walks the bass
+// through the chord tones — +1 the 3rd, +2 the 5th, −1 the top tone (the 5th of a
+// triad, the 7th of a seventh chord) — wrapping round. One number, so nothing
+// new goes in the URL, and with the bass off it means what it always meant.
+export function bassPcOf(chord) {
+  const tones = [...chord.intervals].sort((a, b) => a - b);
+  const k = mod(chord.inv || 0, tones.length);
+  return mod12(chord.rootPc + tones[k]);
+}
+
+// the bass line for a whole progression, each note chained from the last
+export function bassLine(prog) {
+  let prev = null;
+  return prog.map((c) => (prev = bassNote(bassPcOf(c), prev)));
 }
 
 // midi integer -> the note string Tone wants ("C4", "C#4"). Sharp spelling and
