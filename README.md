@@ -68,6 +68,35 @@ Chrome 43+ or Firefox 108+ — Safari has never shipped Web MIDI, on macOS or iO
 secure context, so HTTPS or localhost. The control says which of those is missing rather
 than sitting there dead. Notes go out on channel 1.
 
+**Sound** opens a panel under the controls — the built-in synth with the lid off. Sixteen
+live controls, grouped by what they touch:
+
+- **Voice** — waveform, and *Spread*, which detunes three copies of the oscillator against
+  each other. A little is width; a lot is seasick. *Drive* saturates.
+- **Envelope** — attack, decay, sustain, release. Short attack and low sustain is a pluck;
+  long attack and high sustain is a pad.
+- **Filter** — a resonant lowpass, plus an **LFO** sweeping its cutoff. Wind *Resonance* up
+  and *LFO depth* out and the sweep becomes the sound. At depth zero the filter holds still.
+- **Space** — chorus, reverb, and how long the room takes to die away.
+- **Feel** — *Dynamics* spreads the voices apart in volume (firm bass, singing top, inner
+  voices tucked under); at zero every note is equally loud, which is the organ sound.
+  *Humanise* scatters volume and timing by a few percent so a chord sounds struck rather
+  than triggered. These two are about how a chord is *played*, so they go out the MIDI port
+  as well; the rest shapes the internal synth.
+
+It works everywhere, Safari included — the panel is the built-in synth, so it needs no MIDI
+and no permission, just a press to start the audio (browsers block autoplay until a gesture).
+On an iPhone, note that Safari honours the **ringer switch** for web audio: on silent, there's
+nothing to hear.
+
+Everything retunes live — turn a knob while a loop is playing and you hear it in the next
+chord. Releasing a slider auditions the chord you're on, so you can design a sound with
+nothing in the progression yet. The **presets** (Mellow, Pad, Pluck, Glass, Sweep, Organ)
+set every slider rather than hiding them, so they're somewhere to start from and read; the
+dropdown says *Custom* the moment you move one. Organ is deliberately flat — no dynamics,
+no humanise, no filter movement — so you can hear what the others are doing by switching to
+it and back. The patch rides along in the share link.
+
 Every chord you could play next is listed below the progression, one line
 each — name, roman numeral, the notes in the chord, the voice movement picking it would
 cost (Δ), and what the move *does*. They're **ordered by tension**, least tense first, so
@@ -125,28 +154,33 @@ position.
 
 1. ✅ **Web MIDI out** — done; the **Output** selector drives external instruments.
    Confirmed working into a Waldorf Protein over USB-C, in Chrome.
-2. **Voice-leading** — move common tones and step the rest, so playback flows instead of
-   jumping in parallel blocks.
+2. ✅ **Voice-leading** — done; the **Voice-leading** toggle places each chord's tones
+   nearest the previous chord's, and the piano roll makes the held voices visible.
 3. ✅ **"Suggest a loop"** — done; the **Suggest** button proposes a 2/4/8-bar loop.
-4. **Save progressions** — localStorage or export to a small text format. (The
+4. ✅ **A synth worth listening to** — done; the **Sound** panel, with a filter LFO and
+   velocity shaping, so the progressions land for people without a MIDI rig.
+5. **Save progressions** — localStorage or export to a small text format. (The
    no-storage rule you may have seen was an artifact-sandbox limitation; a real Vite app
    has no such constraint.)
-5. **Inversions and richer voicings** — slash chords, drop-2, open voicings.
-6. **Export** — MIDI file, or a chord-chart / lead-sheet string.
+6. **Inversions and richer voicings** — slash chords, drop-2, open voicings.
+7. **Export** — MIDI file, or a chord-chart / lead-sheet string.
 
 ---
 
 ## For a Claude Code agent
 
-You're working on two pieces: a **pure functional-harmony engine** and a
+You're working on two kinds of thing: **pure, import-free model modules** and a
 **React/Tone.js presentation layer**. Keep that seam clean; it's the main lever for
 testability and for everything on the backlog.
 
 ### File map
 
-- `src/harmony.js` — the engine. No imports at all, so it tests in plain Node.
-- `src/harmony.test.js` — the Vitest suite over it (`npm test`).
-- `src/ChordExplorer.jsx` — the UI, importing the engine's named exports.
+- `src/harmony.js` — the harmony engine. No imports at all, so it tests in plain Node.
+- `src/synth.js` — the synth's parameter model: what the knobs are, what a preset is, how a
+  patch packs into a URL, and the velocity shaping. Builds no audio nodes; also import-free.
+- `src/harmony.test.js`, `src/synth.test.js` — the Vitest suites (`npm test` runs both).
+- `src/ChordExplorer.jsx` — the UI, importing both modules' named exports. Tone lives only
+  here.
 
 Reading the engine top to bottom:
 
@@ -169,9 +203,9 @@ Reading the engine top to bottom:
 - **`score()` / `salience()` / `optionsFrom(current, key)`** — ranks the next-chord
   options. `optionsFrom` is the function the UI actually calls; it decorates each option
   with `move`, `motion`, and a `resolution` flag.
-- **`useSynth()`** — `Tone.PolySynth → Reverb → Destination`, started from the first
-  `pointerdown`/`keydown` on the page. CLAUDE.md has the detail, and the Safari reason it
-  can't be a click.
+- **`useSynth(sound)`** — the Sound panel's chain (`PolySynth → Filter → Distortion →
+  Chorus → Reverb`, LFO on the cutoff), started from the first `pointerdown`/`keydown` on the
+  page. CLAUDE.md has the detail, and the Safari reason it can't be a click.
 - **Component + `ChordCard` + `TensionCurve`** — state is `root, mode, add7, tempo,
   prog, playingIdx`. Styles live in the `CSS` template string with design tokens as CSS
   custom properties.
@@ -182,8 +216,9 @@ Reading the engine top to bottom:
   `func` (one of `tonic | predominant | dominant | subtonic | secondary | borrowed`) so
   it gets a hue via `hueOf`, and a numeric `tension` so it plots on the curve. If you add
   a chord type, wire up both.
-- **The harmony engine is pure.** `buildKey`, `classify`, `optionsFrom`, etc. take data
-  and return data — no React, no Tone, no DOM. `harmony.js` has no imports; don't add
+- **The model modules are pure.** `buildKey`, `classify`, `optionsFrom`, `velocityCurve`,
+  etc. take data and return data — no React, no Tone, no DOM. `harmony.js` and `synth.js`
+  have no imports; don't add
   any. It's what makes the engine unit-testable.
 - **Audio starts on `pointerdown`/`keydown`, never on `click`.** Safari 27 has withdrawn a
   click's user activation by the time its handler runs, so audio started from `onClick` is

@@ -12,9 +12,11 @@ See [README.md](README.md) for the human-facing pitch, design rationale, and roa
 
 The app is a Vite + React project living in [app/](app). The working copies Vite serves are
 [app/src/harmony.js](app/src/harmony.js) (engine),
-[app/src/ChordExplorer.jsx](app/src/ChordExplorer.jsx) (UI) and
-[app/src/harmony.test.js](app/src/harmony.test.js). **Edit those** — that's what runs. The
-repo root mirrors all three as the canonical copies; `cp` them over at a checkpoint.
+[app/src/synth.js](app/src/synth.js) (the synth's parameter model),
+[app/src/ChordExplorer.jsx](app/src/ChordExplorer.jsx) (UI) and the two suites
+[app/src/harmony.test.js](app/src/harmony.test.js) and
+[app/src/synth.test.js](app/src/synth.test.js). **Edit those** — that's what runs. The
+repo root mirrors all five as the canonical copies; `cp` them over at a checkpoint.
 
 ```bash
 cd app
@@ -41,12 +43,24 @@ auto-resolve. If you see `Failed to resolve import "tslib"`, run `npm install ts
 
 ## Architecture
 
-Two pieces, now in two files: a **pure functional-harmony engine** in
-[app/src/harmony.js](app/src/harmony.js) and a **React/Tone.js presentation layer** in
-[app/src/ChordExplorer.jsx](app/src/ChordExplorer.jsx), which imports the engine's named
+Two **pure, import-free model modules** — [app/src/harmony.js](app/src/harmony.js) (the
+functional-harmony engine) and [app/src/synth.js](app/src/synth.js) (the synth's parameter
+model) — and a **React/Tone.js presentation layer** in
+[app/src/ChordExplorer.jsx](app/src/ChordExplorer.jsx), which imports both modules' named
 exports. Keep that seam clean; it's the main lever for testability and for everything on the
-roadmap. The engine has **no imports at all** — not React, not Tone — so
-[app/src/harmony.test.js](app/src/harmony.test.js) runs in plain Node with no audio context.
+roadmap. Neither model has **any imports at all** — not React, not Tone — so
+[app/src/harmony.test.js](app/src/harmony.test.js) and
+[app/src/synth.test.js](app/src/synth.test.js) run in plain Node with no audio context.
+
+`synth.js` is the same bargain as `harmony.js`, applied to sound: it knows what the knobs
+are, what they mean, what a preset is and how a patch packs into a URL, and it builds no
+audio nodes. Reading it top to bottom: **`SYNTH_PARAMS`** (one entry per control — range,
+`log` scaling, formatting, and the tooltip that is the only place each control explains
+itself), **`SYNTH_GROUPS`** (derived from each param's `group`, so a new knob only has to
+name its column to appear in it), **`PRESETS`**, **`paramToPos`/`paramFromPos`** (sliders
+always run 0–1000 integers whatever they control — float `step` drifts and a log parameter
+has no usable linear step), **`packSynth`/`unpackSynth`**, **`lfoRange`**, and
+**`velocityCurve`**.
 
 The engine, reading top to bottom:
 
@@ -135,28 +149,66 @@ The engine, reading top to bottom:
   told otherwise, so Stop and every port change do `clear()` (drop queued note-offs, or they
   land after the reset) then all-notes-off. Not persisted to the URL — port ids are
   machine-local and a shared link carrying one would be nonsense.
-- **`useSynth()`** — `Tone.PolySynth → Reverb → Destination`. Audio starts on the first
-  **`pointerdown` or `keydown` anywhere on the page**, from capture-phase listeners on
-  `window` — **never from a `click` handler**. Safari 27, under its default Auto-Play setting
-  ("Stop Media with Sound"), grants user activation at `pointerdown` and has withdrawn it by
-  `pointerup` (measured: 167ms later, `isActive` false by the time `click` fires), so a
-  context resumed from a click hangs and goes `"interrupted"` — silently, on every site,
-  HTTPS included. Key presses keep activation throughout, which is why keyboard-played pages
-  never noticed. `unlock()` runs on every press: the first swaps in a fresh `Tone.Context`
-  (Tone creates one at *import* — its deprecated top-level exports `Transport`,
-  `Destination`, `Draw` each call `getContext()` as the module loads — and nothing has used
-  it), then **calls** `Tone.start()` synchronously inside the press; later presses restart a
-  context the browser suspended between gestures. The synth is built only once that start has
-  *resolved*, because starting a source on a suspended context gets Tone's `The AudioContext
-  is "suspended"` warning — the one that means audio is broken, so it must not fire when audio
-  is fine. **`ensure()` starts nothing.** It waits on the press's in-flight start (a click
-  handler runs moments after its own `pointerdown`, usually before `resume()` resolves),
-  bounded by `settle()` because a refusing browser leaves `resume()` pending forever, and
-  before any press it answers `null`. That's the other half of the fix: the futures list
-  auditions on **hover**, and on the way to clicking a row the pointer crosses other names, so
-  audio used to get set up from a `mouseenter` — not a gesture, blocked, and the block stuck.
-  Callers of `ensure()` bail on `null`. `release` exists because `Transport.stop()`
-  unschedules what hasn't played but a note already triggered rings out on its envelope.
+- **`useSynth(sound)`** — the chain the Sound panel drives:
+  `PolySynth → Filter → Distortion → Chorus → Reverb → Destination`, with an **LFO on the
+  filter's cutoff**. Audio starts on the first **`pointerdown` or `keydown` anywhere on the
+  page**, from capture-phase listeners on `window` — **never from a `click` handler**. Safari
+  27, under its default Auto-Play setting ("Stop Media with Sound"), grants user activation at
+  `pointerdown` and has withdrawn it by `pointerup` (measured: 167ms later, `isActive` false by
+  the time `click` fires), so a context resumed from a click hangs and goes `"interrupted"` —
+  silently, on every site, HTTPS included. Key presses keep activation throughout, which is why
+  keyboard-played pages never noticed. `unlock()` runs on every press: the first swaps in a
+  fresh `Tone.Context` (Tone creates one at *import* — its deprecated top-level exports
+  `Transport`, `Destination`, `Draw` each call `getContext()` as the module loads — and nothing
+  has used it), then **calls** `Tone.start()` synchronously inside the press; later presses
+  restart a context the browser suspended between gestures. The chain is built only once that
+  start has *resolved*, because the filter LFO and the chorus's own LFOs start as they're
+  built, and starting a source on a suspended context gets Tone's `The AudioContext is
+  "suspended"` warning — the one that means audio is broken, so it must not fire when audio is
+  fine. **`ensure()` starts nothing.** It waits on the press's in-flight start (a click handler
+  runs moments after its own `pointerdown`, usually before `resume()` resolves), bounded by
+  `settle()` because a refusing browser leaves `resume()` pending forever, and before any
+  press it answers `null`. That's the other half of the fix: the futures list auditions on
+  **hover**, and on the way to clicking a row the pointer crosses other names, so audio used
+  to get set up from a `mouseenter` — not a gesture, blocked, and the block stuck. Callers of
+  `ensure()` bail on `null`. `live` is a ref so the chain comes up with the settings in force
+  at the first press, not the ones from mount. Everything after the synth is built **once** and left in place, wet at zero where
+  that means off — rebuilding the chain when a slider moves would cut the sound you're
+  trying to listen to — and `applySound(nodes, s)` retunes what already exists. That's the
+  whole point of a knob, and it's why a preset change mid-playback just re-voices the run.
+  Two details bite if you touch it: **the LFO owns the cutoff outright**, because connecting
+  a signal to a `Tone.Signal` *replaces* its value rather than adding to it, so the sweep's
+  endpoints have to carry the cutoff setting themselves (`lfoRange`, centred in octaves;
+  depth 0 collapses `min` and `max` together, which is exactly a filter that isn't moving).
+  And `reverb.decay` is the one setter that re-renders an impulse response — async and
+  audible — so it's applied only when the value has actually changed. `ensure` returns the
+  `PolySynth`; `release` exists because `Transport.stop()` unschedules what hasn't played
+  but a note already triggered rings out on its envelope.
+- **`velocityCurve(midi, sound, rand)`** (in `synth.js`) — per-note velocity and a few ms of
+  onset drift. A chord with every voice at the same velocity is an organ; **Dynamics**
+  spreads them (firm bass, singing top, inner voices tucked under) and **Humanise** scatters
+  the result. `rand` is **injected**, the same bargain `suggestLoop` makes, and it draws the
+  same number of times whatever Humanise is, so turning it down doesn't reshuffle which note
+  gets which wobble. This is why `playVoiced` triggers **note by note** rather than handing
+  `triggerAttackRelease` the whole chord — per-note velocity needs per-note calls. The
+  stagger is zero unless Arpeggio is on, so it's the same single attack it always was.
+  Dynamics and Humanise are about how a chord is *played* rather than how it sounds, so they
+  go out the **MIDI port too**; everything else in the panel is timbre, which belongs to
+  whatever instrument is on the other end.
+- **The Sound panel** — a concertina under the controls, driven entirely off `SYNTH_PARAMS`,
+  so adding a knob is a line in that table rather than a line of markup. It **pushes the page
+  down** rather than floating over the progression you're listening to, which means normal
+  flow; animating to `height:auto` isn't a thing, but a grid row going `0fr → 1fr` is, and it
+  needs no measured height. All the padding and the border live on `.ce-sound-inner` —
+  anything on the outer element would refuse to collapse to nothing when closed — and
+  `.ce-controls` and the panel share a `.ce-console` wrapper because `.ce-head`'s row gap
+  would otherwise leave a permanent strip of dead space under the control row. The collapsed
+  panel is `inert`, not merely invisible: seventeen controls behind a closed lid should not
+  be tab stops. Releasing a slider **auditions** the chord you're on (or the key's tonic, if
+  the progression is empty) — you can't design a sound you can't hear — but not while
+  playback is running, which is already making the point. The preset name is **derived** by
+  comparing values rather than stored, so a shared link carrying only numbers still opens
+  with the right name in the dropdown, and nudging one slider honestly reads as "Custom".
 - **Playback runs on `Tone.getTransport()`**, not a pass scheduled up front. The Loop toggle
   forced this: a loop needs a Stop that lands *now*, and `Transport.cancel()` is the only
   thing that unschedules what's queued. Events are placed in Transport time (`0:beat:0`),
@@ -257,10 +309,16 @@ The engine, reading top to bottom:
   (`tonic | predominant | dominant | subtonic | secondary | borrowed`) so it gets a hue via
   `hueOf`, and a numeric `tension` so it plots on the curve. If you add a chord type, wire up
   both.
-- **The harmony engine is pure and import-free.** Everything in `harmony.js` takes data and
-  returns data — no React, no DOM, no Tone. Don't add an import to that file; if something
-  needs a library, it belongs in the presentation layer. Keep the pitch math in plain
-  integers.
+- **The model modules are pure and import-free.** Everything in `harmony.js` and `synth.js`
+  takes data and returns data — no React, no DOM, no Tone. Don't add an import to either
+  file; if something needs a library, it belongs in the presentation layer. Keep the pitch
+  math in plain integers. `synth.js` in particular describes the synth but never builds it:
+  the moment it needs `Tone`, the split has gone wrong.
+- **A knob is a row in `SYNTH_PARAMS`, not a piece of markup.** Label, range, scaling,
+  formatter, group and tooltip all live in the table; the panel renders whatever is in it.
+  Adding a control means adding an entry and applying it in `applySound` — and **appending**
+  to the table, never reordering it, because `SYNTH_ORDER` is what every shared link's `sy=`
+  was written against.
 - **Audio starts on `pointerdown`/`keydown`, never on `click`.** `useSynth`'s `unlock()` is
   the only thing that calls `Tone.start()` for the first time, from capture-phase listeners on
   `window`. A click has lost its user activation in Safari 27 by the time its handler runs, so
@@ -298,10 +356,24 @@ Roughly in order of fun (see README for detail):
 3. ✅ **Web MIDI out** — done; `useMidiOut` + the **Output** selector. Verified against a
    Waldorf Protein over USB-C in Chrome.
 4. ✅ **"Suggest a loop"** — done; `suggestLoop` + the **Suggest** control.
-5. **Save progressions** — localStorage or export to a small text format.
-6. **Export** — MIDI file, or a chord-chart / lead-sheet string.
+5. ✅ **Make the built-in synth worth listening to** — done; `synth.js` + the **Sound**
+   concertina. Sixteen live controls over waveform, envelope, a resonant filter with an LFO
+   on its cutoff, chorus/reverb, and the velocity shaping that stops a block chord sounding
+   like an organ. Presets set the sliders rather than hiding them, and the patch rides along
+   in the share link.
+6. **Save progressions** — localStorage or export to a small text format.
+7. **Export** — MIDI file, or a chord-chart / lead-sheet string.
 
 ### Testing
+
+Two suites, one per model module; `npm test` runs both.
+
+[app/src/synth.test.js](app/src/synth.test.js) covers the sound model: that every parameter
+and preset is complete and in range, that the slider mapping round-trips every preset value
+and puts the ends of a range at the ends of the slider, that a patch survives the URL and
+reopens under its own preset name, that a short or damaged `sy=` falls back per parameter
+rather than throwing the lot away, and that `velocityCurve` is flat at zero dynamics, shaped
+at full, bounded under any jitter, and a pure function of its inputs.
 
 [app/src/harmony.test.js](app/src/harmony.test.js) covers the engine: key building across
 all three modes, `classify`, colour chords and suspensions, `optionsFrom` ranking and

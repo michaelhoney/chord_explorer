@@ -21,6 +21,22 @@ import {
   decorateChain,
   optionsFrom,
 } from "./harmony.js";
+import {
+  SYNTH_PARAMS,
+  SYNTH_GROUPS,
+  PRESETS,
+  defaultSound,
+  presetNameFor,
+  paramToPos,
+  paramFromPos,
+  formatParam,
+  packSynth,
+  unpackSynth,
+  isDefaultSound,
+  oscType,
+  lfoRange,
+  velocityCurve,
+} from "./synth.js";
 
 /* ------------------------------------------------------------------ *
  *  CHORD PATHS — a functional-harmony explorer
@@ -32,6 +48,44 @@ import {
 // ------------------------------------------------------------------------
 //  AUDIO
 // ------------------------------------------------------------------------
+// The signal chain the Sound panel drives:
+//
+//   PolySynth → Filter → Distortion → Chorus → Reverb → out
+//                 ↑
+//                LFO
+//
+// Everything after the synth is built once and left in place, wet at zero
+// where that means "off" — rebuilding the chain when a slider moves would
+// cut the sound you're trying to listen to. `applySound` retunes the nodes
+// that already exist, which is the whole point of a knob.
+function applySound(n, s) {
+  n.synth.set({
+    oscillator:
+      s.spread > 0
+        ? { type: oscType(s.wave, s.spread), count: 3, spread: s.spread }
+        : { type: oscType(s.wave, 0) },
+    envelope: {
+      attack: s.attack, decay: s.decay, sustain: s.sustain, release: s.release,
+    },
+  });
+  n.filter.Q.value = s.resonance;
+  // the LFO owns the cutoff outright — see lfoRange
+  const { min, max } = lfoRange(s.cutoff, s.lfoDepth);
+  n.lfo.min = min;
+  n.lfo.max = max;
+  n.lfo.frequency.value = s.lfoRate;
+  n.drive.wet.value = s.drive;
+  n.drive.distortion = 0.2 + s.drive * 0.6;
+  n.chorus.wet.value = s.chorus;
+  n.reverb.wet.value = s.reverb;
+  // decay is the one setter that re-renders an impulse response, which is
+  // both async and audible — so only when it has actually moved
+  if (Math.abs(n.size - s.size) > 1e-3) {
+    n.reverb.decay = s.size;
+    n.size = s.size;
+  }
+}
+
 // a promise that always settles, and never rejects: its own value, or
 // `fallback` if it fails or is still pending after `ms` — for the audio calls
 // Safari can leave pending forever
@@ -41,19 +95,27 @@ const settle = (p, ms, fallback) =>
     new Promise((r) => setTimeout(() => r(fallback), ms)),
   ]);
 
-function buildSynth() {
-  const synth = new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: "triangle" },
-    envelope: { attack: 0.015, decay: 0.25, sustain: 0.55, release: 1.3 },
-  });
-  synth.volume.value = -9;
-  const rev = new Tone.Reverb({ decay: 2.2, wet: 0.22 });
-  synth.chain(rev, Tone.getDestination());
-  return synth;
+// the chain itself
+function buildChain(s) {
+  const synth = new Tone.PolySynth(Tone.Synth);
+  synth.volume.value = -11; // headroom: drive and resonance both add level
+  const filter = new Tone.Filter({ type: "lowpass", rolloff: -24 });
+  const lfo = new Tone.LFO({ frequency: s.lfoRate, min: s.cutoff, max: s.cutoff });
+  lfo.connect(filter.frequency);
+  lfo.start();
+  const drive = new Tone.Distortion({ distortion: 0.3, wet: 0 });
+  const chorus = new Tone.Chorus({ frequency: 1.1, delayTime: 3.5, depth: 0.7, wet: 0 }).start();
+  const reverb = new Tone.Reverb({ decay: s.size, preDelay: 0.02, wet: 0 });
+  synth.chain(filter, drive, chorus, reverb, Tone.getDestination());
+  return { synth, filter, lfo, drive, chorus, reverb, size: s.size };
 }
 
-function useSynth() {
+function useSynth(sound) {
   const ref = useRef(null);
+  // read inside unlock(), which is built once: the chain has to come up with
+  // the settings in force at the first press, not the ones from mount
+  const live = useRef(sound);
+  live.current = sound;
 
   // Audio starts on the first pointerdown or keydown anywhere on the page —
   // not on click. Safari 27 (under its default "Stop Media with Sound") grants
@@ -75,13 +137,17 @@ function useSynth() {
     }
     if (ref.current && Tone.getContext().state === "running") return;
     // resume() is *called* here, synchronously inside the press — that's what
-    // needs the gesture. The synth is built once it has actually resolved:
+    // needs the gesture. The chain is built once it has actually resolved:
+    // the filter LFO and the chorus's own LFOs start as they're built, and
     // starting a source on a suspended context gets Tone's "AudioContext is
     // suspended" warning — the same one that means audio is broken, so it
     // mustn't fire when audio is fine. Called again on a later press if this
     // one never resolves, which is how a blocked first attempt recovers.
     starting.current = Tone.start().then(() => {
-      if (!ref.current) ref.current = buildSynth();
+      if (!ref.current) {
+        ref.current = buildChain(live.current);
+        applySound(ref.current, live.current);
+      }
     });
   }, []);
 
@@ -104,12 +170,17 @@ function useSynth() {
   const ensure = useCallback(async () => {
     if (!starting.current) return null;
     await settle(starting.current, 1500);
-    return ref.current ?? null;
+    return ref.current?.synth ?? null;
   }, []);
+
+  // a slider moved: retune what's playing rather than waiting for the next note
+  useEffect(() => {
+    if (ref.current) applySound(ref.current, sound);
+  }, [sound]);
 
   // Transport.stop() unschedules what hasn't played, but a note already
   // triggered rings out on its own envelope — this cuts it
-  const release = useCallback(() => ref.current?.releaseAll(), []);
+  const release = useCallback(() => ref.current?.synth.releaseAll(), []);
   return { ensure, release };
 }
 
@@ -157,19 +228,22 @@ function useMidiOut() {
   const port = access.current?.outputs.get(portId) || null;
 
   const send = useCallback(
-    (midi, dur, at, stagger = 0) => {
+    (midi, dur, at, stagger = 0, shaped = null) => {
       if (!port) return;
       // Tone schedules on the audio clock; output.send wants a performance.now()
       // stamp, so rebase one onto the other. Both are ms-stable, which is all
       // chord playback needs.
       const t0 = performance.now() + (at - Tone.getContext().currentTime) * 1000;
-      [...midi]
-        .sort((a, b) => a - b) // inversion shifts leave midi unsorted; roll upward
-        .forEach((m, i) => {
-          const on = t0 + i * stagger * 1000;
-          port.send([0x90 | CH, m, VELOCITY], on);
-          port.send([0x80 | CH, m, 0], t0 + dur * 1000);
-        });
+      // midi arrives already sorted ascending, so `shaped` lines up with it —
+      // Dynamics and Humanise are about how a chord is *played*, so they travel
+      // out the port too. Everything else in the Sound panel is timbre, which
+      // belongs to whatever instrument is on the other end.
+      midi.forEach((m, i) => {
+        const on = t0 + i * stagger * 1000 + (shaped ? shaped[i].delay * 1000 : 0);
+        const vel = shaped ? Math.max(1, Math.round(shaped[i].velocity * 127)) : VELOCITY;
+        port.send([0x90 | CH, m, vel], on);
+        port.send([0x80 | CH, m, 0], t0 + dur * 1000);
+      });
     },
     [port]
   );
@@ -261,6 +335,10 @@ function encodeState(s) {
   if (s.loop) p.set("lp", "1");
   if (s.susOn) p.set("su", "1");
   if (s.tempo !== 96) p.set("t", s.tempo);
+  // the sound travels with the link — a progression you designed a patch for
+  // should arrive sounding like it. Only when it isn't the default, though:
+  // no reason to hang 16 numbers off every share.
+  if (!isDefaultSound(s.sound)) p.set("sy", packSynth(s.sound));
   if (s.prog.length) p.set("p", s.prog.map(chordToken).join("_"));
   return p.toString();
 }
@@ -281,6 +359,7 @@ function decodeState(search) {
   const loop = p.get("lp") === "1";
   const susOn = p.get("su") === "1";
   const tempo = clampNum(p.get("t"), 96, 60, 140);
+  const sound = unpackSynth(p.get("sy")); // clamps per parameter; absent → default
   const pool = (() => {
     const key = resolveKey(root, mode, add7);
     // suspensions always in the lookup pool so a shared progression reconstitutes
@@ -308,7 +387,7 @@ function decodeState(search) {
   // decorated through the engine, so a reconstituted chord carries exactly the
   // fields a chosen or suggested one does
   const chain = decorateChain(prog, mode).map((c, i) => ({ ...c, id: i + 1 }));
-  return { root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog: chain };
+  return { root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog: chain };
 }
 
 export default function ChordExplorer() {
@@ -321,6 +400,8 @@ export default function ChordExplorer() {
   const [loop, setLoop] = useState(boot.loop ?? false);
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
   const [tempo, setTempo] = useState(boot.tempo ?? 96);
+  const [sound, setSound] = useState(boot.sound ?? defaultSound());
+  const [soundOpen, setSoundOpen] = useState(false);
   const [prog, setProg] = useState(boot.prog ?? []);
   const [playingIdx, setPlayingIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
@@ -328,7 +409,11 @@ export default function ChordExplorer() {
   const loopRef = useRef(false);
   const [query, setQuery] = useState("");
   const [tensionDesc, setTensionDesc] = useState(false); // least tense first
-  const { ensure, release } = useSynth();
+  // in a ref as well as state so playVoiced doesn't take a new identity on
+  // every frame of a slider drag — it only ever reads the current value
+  const soundRef = useRef(sound);
+  soundRef.current = sound;
+  const { ensure, release } = useSynth(sound);
   const midi = useMidiOut();
   const { send: midiSend, panic: midiPanic, active: midiActive } = midi;
   const uid = useRef(boot.prog?.length ?? 0);
@@ -355,10 +440,10 @@ export default function ChordExplorer() {
 
   // keep the URL in sync so any state is bookmarkable / shareable
   useEffect(() => {
-    const qs = encodeState({ root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog });
+    const qs = encodeState({ root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog });
     const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     window.history.replaceState(null, "", url);
-  }, [root, mode, add7, voiceLead, arp, loop, susOn, tempo, prog]);
+  }, [root, mode, add7, voiceLead, arp, loop, susOn, tempo, sound, prog]);
 
   const current = prog.length ? prog[prog.length - 1] : null;
   const { inKey, colour, sus } = useMemo(() => optionsFrom(current, key), [current, key]);
@@ -422,22 +507,25 @@ export default function ChordExplorer() {
       // ensure() even when routing to MIDI: the Transport and the clock that
       // timestamps the messages both need a running audio context
       const synth = await ensure();
-      if (!synth) return; // no press yet: a hover, before any click
+      if (!synth) return; // no gesture yet: a hover, before any click
       const t = when ?? Tone.now();
+      // sorted once, here: inversion shifts leave midi unsorted, an arpeggio
+      // rolls upward, and velocityCurve reads the shape off pitch order
+      const sorted = [...midi].sort((a, b) => a - b);
+      const stagger = arp && sorted.length > 1 ? Math.min(dur * 0.22, 0.16) : 0;
+      const shaped = velocityCurve(sorted, soundRef.current);
       if (midiActive) {
-        midiSend(midi, dur, t, arp && midi.length > 1 ? Math.min(dur * 0.22, 0.16) : 0);
+        midiSend(sorted, dur, t, stagger, shaped);
         return; // the port replaces the built-in synth rather than doubling it
       }
-      if (arp && midi.length > 1) {
-        // roll the notes up low-to-high (inversion shifts leave midi unsorted)
-        const notes = midiToNotes([...midi].sort((a, b) => a - b));
-        const stagger = Math.min(dur * 0.22, 0.16);
-        notes.forEach((n, i) => {
-          synth.triggerAttackRelease(n, dur - i * stagger, t + i * stagger);
-        });
-      } else {
-        synth.triggerAttackRelease(midiToNotes(midi), dur, t);
-      }
+      // note by note rather than one call with the whole chord: a block chord
+      // with every voice at the same velocity is the organ sound, and per-note
+      // velocity is the difference. The stagger is zero unless Arpeggio is on,
+      // so this is the same single attack it always was.
+      midiToNotes(sorted).forEach((n, i) => {
+        const at = t + i * stagger + shaped[i].delay;
+        synth.triggerAttackRelease(n, dur - i * stagger, at, shaped[i].velocity);
+      });
     },
     [ensure, arp, midiActive, midiSend]
   );
@@ -451,6 +539,14 @@ export default function ChordExplorer() {
     },
     [voiceLead, voicings, playVoiced]
   );
+
+  // you can't design a sound you can't hear: releasing a slider plays the chord
+  // you're on, or the key's tonic if there's no progression yet. Held back while
+  // playback runs, which is already demonstrating the change as you make it.
+  const auditionSound = useCallback(() => {
+    if (playingRef.current) return;
+    playVoiced(fromMidi ?? rootPositionMidi(key.diatonic[0]), 1.5);
+  }, [fromMidi, key, playVoiced]);
 
   const choose = useCallback(
     async (opt, rowEl) => {
@@ -761,6 +857,10 @@ export default function ChordExplorer() {
           </button>
         </div>
 
+        {/* the controls and the sound panel share a wrapper so the concertina
+            can sit flush when it's closed — .ce-head's row gap would otherwise
+            leave a permanent strip of dead space under the control row */}
+        <div className="ce-console">
         <div className="ce-controls">
           {/* what chords there are to choose from, and one that picks for you */}
           <div className="ce-cgroup">
@@ -899,7 +999,28 @@ export default function ChordExplorer() {
               onChange={(e) => setTempo(Number(e.target.value))}
             />
           </label>
+
+          {/* opens the concertina below — a playback preference like the rest
+              of this group, just one with sixteen knobs behind it */}
+          <button
+            className={"ce-toggle ce-sound-btn" + (soundOpen ? " on" : "")}
+            aria-expanded={soundOpen}
+            aria-controls="ce-sound-panel"
+            onClick={() => setSoundOpen((v) => !v)}
+            title="Shape the built-in synth — waveform, envelope, filter and its LFO, space"
+          >
+            Sound<span className="ce-chev" aria-hidden="true">▾</span>
+          </button>
           </div>
+          </div>
+
+          <SoundPanel
+            open={soundOpen}
+            sound={sound}
+            setSound={setSound}
+            onAudition={auditionSound}
+            midiActive={midiActive}
+          />
         </div>
       </header>
 
@@ -983,6 +1104,103 @@ export default function ChordExplorer() {
         ))}
         <span className="ce-leg-note">Colour shows what a chord does to the harmony.</span>
       </footer>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------
+//  SOUND — the synth, with the lid off
+// ------------------------------------------------------------------------
+// One control per parameter, read straight off SYNTH_PARAMS, so adding a knob
+// is a line in the table rather than a line of markup. Every slider runs
+// 0–1000 whatever it controls (see paramToPos) — which is meaningless to read
+// aloud, hence aria-valuetext carrying the formatted value instead.
+function Knob({ k, value, onChange, onCommit }) {
+  const p = SYNTH_PARAMS[k];
+  if (p.kind === "enum") {
+    return (
+      <label className="ce-knob ce-knob-enum" title={p.hint}>
+        <span className="ce-knob-top"><em>{p.label}</em></span>
+        <select value={value} onChange={(e) => onChange(e.target.value)}>
+          {p.options.map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  return (
+    <label className="ce-knob" title={p.hint}>
+      <span className="ce-knob-top">
+        <em>{p.label}</em>
+        <b>{formatParam(k, value)}</b>
+      </span>
+      <input
+        type="range" min="0" max="1000" step="1"
+        value={paramToPos(k, value)}
+        aria-label={p.label}
+        aria-valuetext={formatParam(k, value)}
+        onChange={(e) => onChange(paramFromPos(k, Number(e.target.value)))}
+        // audition on release, not on every frame of the drag
+        onPointerUp={onCommit}
+        onKeyUp={onCommit}
+      />
+    </label>
+  );
+}
+
+// A concertina rather than a popover or a separate page: the sound is part of
+// the same instrument as the key and the tempo, and opening it should push the
+// page down rather than float over the progression you're listening to. The
+// 0fr→1fr grid transition is what makes that animate without a measured height.
+function SoundPanel({ open, sound, setSound, onAudition, midiActive }) {
+  const preset = presetNameFor(sound);
+  const set = (k) => (v) => setSound((s) => ({ ...s, [k]: v }));
+  return (
+    <div className={"ce-sound" + (open ? " open" : "")} id="ce-sound-panel">
+      <div className="ce-sound-clip">
+        {/* inert, not just hidden: a collapsed panel shouldn't collect tab stops */}
+        <div className="ce-sound-inner" inert={!open}>
+          <div className="ce-sound-head">
+            <label className="ce-field">
+              <span>Preset</span>
+              <select
+                value={preset ?? "custom"}
+                title="A starting point — every slider below is still yours afterwards"
+                onChange={(e) => setSound({ ...PRESETS[e.target.value] })}
+              >
+                {Object.keys(PRESETS).map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+                {/* only offered as a readout of where you are; picking it is a no-op */}
+                {!preset && <option value="custom" disabled>Custom</option>}
+              </select>
+            </label>
+            <p className="ce-sound-note">
+              {midiActive
+                ? "Routed to MIDI — Dynamics and Humanise still go out the port; the rest shapes the built-in synth."
+                : "Shapes the built-in synth. Drag a slider and release it to hear the chord you're on."}
+            </p>
+          </div>
+
+          <div className="ce-sound-grid">
+            {SYNTH_GROUPS.map((g) => (
+              <div className="ce-sgroup" key={g.name}>
+                <h4 className="ce-eyebrow">{g.name}</h4>
+                {g.keys.map((k) => (
+                  <Knob
+                    key={k}
+                    k={k}
+                    value={sound[k]}
+                    onChange={set(k)}
+                    onCommit={onAudition}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1403,6 +1621,56 @@ const CSS = `
 .ce-toggle.on{background:var(--ink); color:var(--panel); border-color:var(--ink);}
 .ce-midi{align-self:auto;} /* sits under a field label, not flush with the toggle row */
 .ce-midi:disabled{opacity:.5; cursor:default;}
+
+/* --- the sound concertina -------------------------------------------------
+   Opening it pushes the page down rather than floating over the progression,
+   so it stays in normal flow. Animating to height:auto isn't a thing, but a
+   grid row animating 0fr -> 1fr is, and it needs no measured height — so the
+   panel can grow or shrink with its own content and still slide. All the
+   padding and the border live on the inner element: anything on the outer
+   would refuse to collapse to nothing when closed. */
+.ce-console{display:flex; flex-direction:column;}
+.ce-sound{
+  display:grid; grid-template-rows:0fr;
+  transition:grid-template-rows .3s cubic-bezier(.3,.8,.35,1);
+}
+.ce-sound.open{grid-template-rows:1fr;}
+/* contain:layout is for WebKit — without it the last frame of the transition
+   can flicker on a retina display. It changes nothing elsewhere: overflow
+   already made this a containing block. */
+.ce-sound-clip{overflow:hidden; min-height:0; contain:layout;}
+.ce-sound-inner{
+  margin-top:16px; padding:14px 16px; border-radius:13px;
+  background:var(--panel); border:1px solid var(--line);
+  opacity:0; transition:opacity .18s ease .05s;
+}
+.ce-sound.open .ce-sound-inner{opacity:1;}
+.ce-sound-btn{display:inline-flex; align-items:center; gap:6px;}
+.ce-chev{font-size:9px; line-height:1; transition:transform .25s ease;}
+.ce-sound-btn.on .ce-chev{transform:rotate(180deg);}
+
+.ce-sound-head{display:flex; flex-wrap:wrap; gap:8px 18px; align-items:flex-end; margin-bottom:14px;}
+.ce-sound-note{margin:0; font-size:11.5px; color:var(--muted); line-height:1.45; max-width:58ch; flex:1 1 260px;}
+
+/* auto-fit rather than a fixed column count: the five groups sit in one row on
+   a wide screen and reflow to two or one without a breakpoint each */
+.ce-sound-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(178px, 1fr)); gap:16px 22px;}
+.ce-sgroup{display:flex; flex-direction:column; gap:8px; min-width:0;}
+.ce-sgroup h4{margin:0 0 1px; font-weight:500;}
+.ce-knob{display:flex; flex-direction:column; gap:3px; cursor:pointer;}
+.ce-knob-top{display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-family:var(--mono); font-size:10.5px;}
+.ce-knob-top em{font-style:normal; color:var(--muted); letter-spacing:.04em;}
+/* tabular figures so a value counting up doesn't jiggle the label beside it */
+.ce-knob-top b{font-weight:500; color:var(--ink); font-variant-numeric:tabular-nums;}
+.ce-knob input[type=range]{width:100%; margin:0; accent-color:var(--ink); cursor:pointer;}
+.ce-knob-enum select{
+  font-family:var(--mono); font-size:12px; padding:5px 8px; border-radius:8px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink); cursor:pointer; width:100%;
+}
+
+@media (prefers-reduced-motion: reduce){
+  .ce-sound, .ce-sound-inner, .ce-chev{transition:none;}
+}
 
 .ce-eyebrow{font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted);}
 
