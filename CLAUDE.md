@@ -146,8 +146,9 @@ The engine, reading top to bottom:
   static mockup it was built from, and the reference for anything visual. One white chassis
   (`.ce-chassis`), modules set into it with 2px seams (the chassis colour showing through the
   grid gap), each with a printed number and name (`ModHead`): **01 Key** (root, mode, 7ths,
-  Sus), **02 Generate** (Suggest + bars, Mutate + amount, Evolve), **03 Playback** (voicing,
-  bass, hold bass, loop, arpeggio, -4-, tempo), **04 Out** (route and MIDI port), then the
+  Sus), **02 Generate** (Suggest + bars, Mutate + amount, then **Repeat** — Off / Loop /
+  Evolve as one row of keys — and Evolve's **Every** 1/2/4/8), **03 Playback** (voicing,
+  bass, hold bass, arpeggio, -4-, tempo), **04 Out** (route and MIDI port), then the
   display with the **transport** beside it, **05** the futures and **06 Sound**. Generate sits
   with Key rather than the transport because it sets up material rather than editing what's
   there — the same reason changing key clears the progression. Four columns, two below
@@ -293,9 +294,15 @@ The engine, reading top to bottom:
   the end of the cycle. Stop lands anything you queued rather than dropping it. A queued
   **mutation is derived, not stored**: `nextProg` re-runs `mutateLoop(prog, key, { rand:
   seededRandom(seed), previous })` every render until it lands, so edits made while it waits
-  are carried into it, and the seed keeps it the same mutation. **Evolve** (`ev=1`, needs
-  Loop) is an effect that queues an `auto` mutation whenever a looping run has nothing
-  queued; Stop drops an `auto` one, since it was only ever for next time round.
+  are carried into it, and the seed keeps it the same mutation. Loop and Evolve are one
+  three-way control (`repeat`, derived from the `loop` and `evolve` booleans, so Evolve can't
+  be on without Loop). **Loop is on by default** — the URL records `lp=0` when it's off, so an
+  old link without `lp` now opens looping. **Evolve** (`ev=1`) is an effect that queues an
+  `auto` mutation whenever a looping run has nothing queued; the tick counts `rounds` since
+  the progression last changed and lands an `auto` one only once that reaches **Every**
+  (`evolveEvery`, `ee=` when not 1, read through a ref so a change reaches a run in flight).
+  Anything you queued yourself still lands at the very next cycle end. Stop drops an `auto`
+  one, since it was only ever for next time round.
   The **mutation level** (the select beside Mutate, `ml=` when not 1) is 1–4 quarters of
   the bars, read live, so Evolve and a waiting mutation both follow it.
   **`mutateLoop`** (in `harmony.js`) re-picks `level` quarters of the bars (at least one).

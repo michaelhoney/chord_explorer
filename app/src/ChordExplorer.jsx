@@ -324,6 +324,9 @@ function realise(prog, voiceLead, bassOn) {
 const MAX_GENS = 24;
 
 // Mutate's levels: that many quarters of the bars. Only "all" touches bar 1
+// Evolve's pace: land a mutation after this many times round
+const EVOLVE_EVERY = [1, 2, 4, 8];
+
 const MUT_LEVELS = [
   ["1/4", "about a quarter of the bars"],
   ["1/2", "about half the bars"],
@@ -391,8 +394,9 @@ function encodeState(s) {
   if (s.arpFour) p.set("a4", "1");
   if (s.arpOrder === "random") p.set("ao", "rnd");
   if (s.holdBass) p.set("bh", "1");
-  if (s.loop) p.set("lp", "1");
+  if (!s.loop) p.set("lp", "0"); // on by default; only record when turned off
   if (s.evolve) p.set("ev", "1");
+  if (s.evolveEvery !== 1) p.set("ee", s.evolveEvery);
   if (s.mutLevel !== 1) p.set("ml", s.mutLevel); // shapes what Evolve does, so it travels
   if (s.susOn) p.set("su", "1");
   if (s.tempo !== 96) p.set("t", s.tempo);
@@ -442,8 +446,9 @@ function decodeState(search) {
   const arpFour = p.get("a4") === "1";
   const arpOrder = p.get("ao") === "rnd" ? "random" : "rise";
   const holdBass = p.get("bh") === "1";
-  const loop = p.get("lp") === "1";
-  const evolve = p.get("ev") === "1";
+  const loop = p.get("lp") !== "0";
+  const evolve = loop && p.get("ev") === "1";
+  const evolveEvery = EVOLVE_EVERY.includes(Number(p.get("ee"))) ? Number(p.get("ee")) : 1;
   const mutLevel = clampNum(p.get("ml"), 1, 1, 4);
   const susOn = p.get("su") === "1";
   const tempo = clampNum(p.get("t"), 96, 30, 150);
@@ -475,7 +480,7 @@ function decodeState(search) {
   // decorated through the engine, so a reconstituted chord carries exactly the
   // fields a chosen or suggested one does
   const chain = decorateChain(prog, mode).map((c, i) => ({ ...c, id: i + 1 }));
-  return { root, mode, add7, voiceLead, bass, arp, arpFour, arpOrder, holdBass, loop, evolve, mutLevel, susOn, tempo, sound, prog: chain };
+  return { root, mode, add7, voiceLead, bass, arp, arpFour, arpOrder, holdBass, loop, evolve, evolveEvery, mutLevel, susOn, tempo, sound, prog: chain };
 }
 
 export default function ChordExplorer() {
@@ -489,8 +494,16 @@ export default function ChordExplorer() {
   const [arpFour, setArpFour] = useState(boot.arpFour ?? false);
   const [arpOrder, setArpOrder] = useState(boot.arpOrder ?? "rise");
   const [holdBass, setHoldBass] = useState(boot.holdBass ?? false);
-  const [loop, setLoop] = useState(boot.loop ?? false);
+  const [loop, setLoop] = useState(boot.loop ?? true);
   const [evolve, setEvolve] = useState(boot.evolve ?? false);
+  // Evolve lands its mutation after this many times round, not every time
+  const [evolveEvery, setEvolveEvery] = useState(boot.evolveEvery ?? 1);
+  // Off / Loop / Evolve are one row of keys: Evolve only means anything looping
+  const repeat = !loop ? "off" : evolve ? "evolve" : "loop";
+  const setRepeat = (v) => {
+    setLoop(v !== "off");
+    setEvolve(v === "evolve");
+  };
   // how much Mutate (and so Evolve) changes: that many quarters of the bars
   const [mutLevel, setMutLevel] = useState(boot.mutLevel ?? 1);
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
@@ -570,9 +583,9 @@ export default function ChordExplorer() {
   // out every render, and it's what Share copies — so a share never lags the
   // page, however recently something changed.
   const path = useMemo(() => {
-    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, mutLevel, susOn, tempo, sound, prog });
+    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, evolveEvery, mutLevel, susOn, tempo, sound, prog });
     return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-  }, [root, mode, add7, voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, mutLevel, susOn, tempo, sound, prog]);
+  }, [root, mode, add7, voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, evolveEvery, mutLevel, susOn, tempo, sound, prog]);
 
   // Written to the address bar behind a short debounce, not on every change. A
   // slider drag changes state every frame, and Safari allows 100 replaceState
@@ -845,6 +858,9 @@ export default function ChordExplorer() {
   const STEP = 2; // one chord = a half note = two beats
   const atBeat = (n) => `0:${n}:0`;
   const cursor = useRef(0);
+  // times round since the progression last changed, for Evolve's pace
+  const rounds = useRef(0);
+  const evolveEveryRef = useRef(1);
 
   const stopPlayback = useCallback(() => {
     const t = Tone.getTransport();
@@ -875,6 +891,7 @@ export default function ChordExplorer() {
     t.loop = false;
     t.bpm.value = tempo;
     cursor.current = 0;
+    rounds.current = 0;
     t.scheduleRepeat((time) => {
       const live = liveRef.current;
       let i = cursor.current;
@@ -885,7 +902,10 @@ export default function ChordExplorer() {
           Tone.getDraw().schedule(() => stopRef.current(), time);
           return;
         }
-        if (live.next) {
+        rounds.current += 1;
+        // an Evolve mutation waits out its rounds; anything you asked for lands now
+        if (live.next && (!live.next.queued.auto || rounds.current >= evolveEveryRef.current)) {
+          rounds.current = 0;
           // swap now, in the callback — Tone runs it ~100ms ahead of the audio,
           // and waiting on React would play bar 1 of the old progression
           const { queued: q, prog: p, played: pl } = live.next;
@@ -912,6 +932,7 @@ export default function ChordExplorer() {
   // the toggles reach into a run already in progress
   useEffect(() => { Tone.getTransport().bpm.value = tempo; }, [tempo]);
   useEffect(() => { loopRef.current = loop; }, [loop]);
+  useEffect(() => { evolveEveryRef.current = evolveEvery; }, [evolveEvery]);
 
   // Evolve: whenever a run is looping with nothing queued, queue a mutation for
   // next time round. It lands, the queue empties, and this queues the next one.
@@ -1287,24 +1308,39 @@ export default function ChordExplorer() {
                 <Steps value={mutLevel} onChange={setMutLevel} />
               </Field>
             </div>
-            <Field label="Evolve each loop">
-              <Keys
-                label="Evolve"
-                value={evolve}
-                disabled={!loop}
-                onChange={setEvolve}
-                options={[
-                  { v: false, label: "Off", title: "Keep the loop as it is" },
-                  {
-                    v: true,
-                    label: "Evo",
-                    title: loop
-                      ? "Mutate the progression every time the loop comes round, so it keeps changing while it plays. Every version stays in the history"
-                      : "Mutates the loop each time it comes round — turn Loop on to use it",
-                  },
-                ]}
-              />
-            </Field>
+            <div className="ce-row">
+              <Field label="Repeat">
+                <Keys
+                  label="Repeat"
+                  value={repeat}
+                  onChange={setRepeat}
+                  options={[
+                    { v: "off", label: "Off", title: "Play the progression once and stop" },
+                    { v: "loop", label: "Loop", title: "Repeat the progression until you press Stop" },
+                    {
+                      v: "evolve",
+                      label: "Evolve",
+                      title: "Loop, and mutate the progression as it comes round, so it keeps changing while it plays. Mutate's amount sets how much; every version stays in the history",
+                    },
+                  ]}
+                />
+              </Field>
+              <Field label="Every">
+                <Keys
+                  label="Evolve after this many times round"
+                  value={evolveEvery}
+                  disabled={!evolve}
+                  onChange={setEvolveEvery}
+                  options={EVOLVE_EVERY.map((n) => ({
+                    v: n,
+                    label: String(n),
+                    title: evolve
+                      ? n === 1 ? "Evolve every time the loop comes round" : `Evolve after ${n} times round`
+                      : "How often Evolve changes the loop — pick Evolve to use it",
+                  }))}
+                />
+              </Field>
+            </div>
           </div>
         </section>
 
@@ -1344,18 +1380,6 @@ export default function ChordExplorer() {
                       : "Holds the bass under an arpeggio — needs Bass on and an arpeggio"}
                   >
                     {SYM.hold}
-                  </Toggle>
-                </div>
-              </Field>
-              <Field label="Loop">
-                <div className="ce-bg">
-                  <Toggle
-                    on={loop}
-                    onClick={() => setLoop((v) => !v)}
-                    aria-label="Loop"
-                    title="Repeat the progression until you press Stop"
-                  >
-                    {SYM.loop}
                   </Toggle>
                 </div>
               </Field>
@@ -1503,7 +1527,7 @@ export default function ChordExplorer() {
                     <li>
                       <span
                         className="ce-gen ghost"
-                        title={`${genNames(nextProg)}\n` + (queued.auto ? "Evolve: plays when the loop comes round" : "Plays when the loop comes round")}
+                        title={`${genNames(nextProg)}\n` + (queued.auto ? `Evolve: plays ${evolveEvery === 1 ? "when the loop comes round" : `after ${evolveEvery} times round`}` : "Plays when the loop comes round")}
                       >
                         +
                       </span>
@@ -2108,7 +2132,6 @@ const SYM = {
   random: <Sym><Dot x={3} y={6} /><Dot x={11} y={10} /><Dot x={19} y={2} /></Sym>,
   // hold bass: an arpeggio over a line that doesn't stop
   hold: <Sym><path d="M1 11h20" /><Dot x={5} y={6} /><Dot x={11} y={3} /><Dot x={17} y={6} /></Sym>,
-  loop: <Sym><path d="M7 2h8a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8z" /><path d="M13 0l2 2-2 2" /></Sym>,
   suggest: <Sym box="0 0 12 12"><path d="M1 9h2l3-6h2l3 6" /></Sym>,
   mutate: <Sym box="0 0 12 12"><path d="M2 3h5l-2-2M10 9H5l2 2" /></Sym>,
   play: <Sym box="0 0 14 14"><path d="M3 1.5v11L12 7z" fill="currentColor" stroke="none" /></Sym>,

@@ -51,8 +51,8 @@ it falls back to system fonts and still works.
 ## Using it
 
 The controls are grouped by what they act on: **chord population** on the left of the
-header (key, mode, 7ths, Sus, Suggest), **playback preferences** on the right
-(voice-leading, bass, arpeggio, loop, output, tempo), and **transport and editing** down with the
+header (key, mode, 7ths, Sus, Suggest, Mutate, and Loop / Evolve), **playback preferences** on the right
+(voice-leading, bass, arpeggio, output, tempo), and **transport and editing** down with the
 progression itself. The share icon at the top right copies a link to whatever you have.
 
 Set a **key** and **major/minor**, then click any chord to start. The **7ths** toggle
