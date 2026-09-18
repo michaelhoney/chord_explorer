@@ -206,7 +206,6 @@ function useSynth(sound) {
 // secure context (localhost counts). Both are detected up front and reported in
 // the UI, rather than leaving a control that silently does nothing.
 const MIDI_SUPPORTED = typeof navigator?.requestMIDIAccess === "function";
-const CH = 0; // channel 1
 
 function useMidiOut() {
   const [status, setStatus] = useState(() =>
@@ -214,6 +213,10 @@ function useMidiOut() {
   );
   const [outputs, setOutputs] = useState([]);
   const [portId, setPortId] = useState("");
+  // 0–15 on the wire, 1–16 on the keys. Per visit and not in the URL, like the
+  // port: which channel an instrument listens on is about your rig, not the
+  // progression, and a shared link carrying one would be nonsense elsewhere.
+  const [channel, setChannel] = useState(0);
   const access = useRef(null);
 
   const enable = useCallback(async () => {
@@ -253,21 +256,21 @@ function useMidiOut() {
       // is on the other end.
       for (const e of events) {
         const vel = Math.max(1, Math.round(e.velocity * 127));
-        port.send([0x90 | CH, e.midi, vel], t0 + e.at * 1000);
-        port.send([0x80 | CH, e.midi, 0], t0 + (e.at + e.dur) * 1000);
+        port.send([0x90 | channel, e.midi, vel], t0 + e.at * 1000);
+        port.send([0x80 | channel, e.midi, 0], t0 + (e.at + e.dur) * 1000);
       }
     },
-    [port]
+    [port, channel]
   );
 
   // hardware holds a note until told otherwise, so Stop has to be emphatic
   const panic = useCallback(() => {
     if (!port) return;
     port.clear?.(); // drop note-offs still queued, or they arrive after the reset
-    port.send([0xb0 | CH, 123, 0]); // all notes off
-  }, [port]);
+    port.send([0xb0 | channel, 123, 0]); // all notes off
+  }, [port, channel]);
 
-  return { status, outputs, portId, setPortId, enable, send, panic, active: !!port };
+  return { status, outputs, portId, setPortId, channel, setChannel, enable, send, panic, active: !!port };
 }
 
 // ------------------------------------------------------------------------
@@ -1409,6 +1412,25 @@ export default function ChordExplorer() {
                 <p className="ce-print">No MIDI outputs found</p>
               )}
             </Field>
+            {/* sixteen keys, four by four. Leaving a channel silences it first,
+                the same as leaving a port: whatever it was holding stops. */}
+            <Field label="Chan">
+              <Keys
+                grid
+                label="MIDI channel"
+                value={midi.channel}
+                disabled={!midiActive}
+                onChange={(ch) => {
+                  midiPanic();
+                  midi.setChannel(ch);
+                }}
+                options={Array.from({ length: 16 }, (_, ch) => ({
+                  v: ch,
+                  label: String(ch + 1),
+                  title: midiActive ? `Send on MIDI channel ${ch + 1}` : "The channel notes go out on — route to MIDI to use it",
+                }))}
+              />
+            </Field>
           </div>
         </section>
 
@@ -1598,9 +1620,9 @@ const Field = ({ label, title, children }) => (
 
 // A row of keys with cut-out legends, the chosen one lit from behind. This is
 // what every dropdown became: the choices are always in view.
-function Keys({ label, value, options, onChange, disabled, column }) {
+function Keys({ label, value, options, onChange, disabled, column, grid }) {
   return (
-    <div className={"ce-bg" + (column ? " col" : "")} role="radiogroup" aria-label={label}>
+    <div className={"ce-bg" + (column ? " col" : "") + (grid ? " grid" : "")} role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <button
           key={String(o.v)}
@@ -2365,6 +2387,12 @@ body{margin:0; background:#F3F3F0;}
 .ce-bg.col > button:first-child{border-radius:6.5px 6.5px 0 0;}
 .ce-bg.col > button:last-child{border-radius:0 0 6.5px 6.5px;}
 .ce-bg.col > button:only-child{border-radius:6.5px;}
+.ce-bg.grid{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); width:100%; max-width:240px;}
+.ce-root .ce-bg.grid > button{min-width:0; padding:0; border-radius:0;}
+.ce-root .ce-bg.grid > button:nth-child(1){border-top-left-radius:6.5px;}
+.ce-root .ce-bg.grid > button:nth-child(4){border-top-right-radius:6.5px;}
+.ce-root .ce-bg.grid > button:nth-child(13){border-bottom-left-radius:6.5px;}
+.ce-root .ce-bg.grid > button:nth-child(16){border-bottom-right-radius:6.5px;}
 .ce-bg > button:hover:not(:disabled), .ce-keys > button:hover{color:var(--print);}
 .ce-root .ce-bg > button.on, .ce-root .ce-keys > button.on{
   color:var(--lamp); background:#FFFDFB; text-shadow:0 0 8px var(--lamp-glow);

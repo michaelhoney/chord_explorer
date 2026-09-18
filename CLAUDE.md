@@ -182,7 +182,10 @@ The engine, reading top to bottom:
   rather than doubling it. `panic()` is not optional politeness: hardware holds a note until
   told otherwise, so Stop and every port change do `clear()` (drop queued note-offs, or they
   land after the reset) then all-notes-off. Not persisted to the URL — port ids are
-  machine-local and a shared link carrying one would be nonsense.
+  machine-local and a shared link carrying one would be nonsense. The **channel** (`Chan`,
+  sixteen keys four by four, live only while routed to MIDI) follows the same rule: it's
+  about your rig, not the progression. Changing it panics the old channel first, exactly as
+  changing port does.
 - **`useSynth(sound)`** — the chain the Sound panel drives:
   `PolySynth → Filter → Distortion → Chorus → Reverb → Destination`, with an **LFO on the
   filter's cutoff**. Audio starts on the first **`pointerdown` or `keydown` anywhere on the
