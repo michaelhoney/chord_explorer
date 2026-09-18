@@ -20,6 +20,7 @@ import {
   resolveKey,
   suspensionsFor,
   suggestLoop,
+  mutateLoop,
   decorateChain,
   optionsFrom,
 } from "./harmony.js";
@@ -312,6 +313,52 @@ const EXIT_MS = 170;
 const SPAWN_MS = 340;
 
 // stable identity for an option row (roman alone collides: minor has V and V7)
+// A progression realised as what sounds: upper voices plus the bass voice, if on.
+// The component memoises this for the current progression; playback also needs
+// it for the one queued behind it, so it can swap the two on the beat.
+function realise(prog, voiceLead, bassOn) {
+  const v = computeVoicings(prog, voiceLead);
+  const b = bassOn ? bassLine(prog) : null;
+  return v.map((upper, i) => ({ upper, bass: b ? b[i] : null }));
+}
+
+// History: Suggest, Mutate and Evolve each add a generation; hand edits change
+// the current one in place. An empty current generation is a blank page rather
+// than history, so it's written over instead of kept.
+const MAX_GENS = 24;
+
+// Mutate's levels: that many quarters of the bars. Only "all" touches bar 1
+const MUT_LEVELS = [
+  ["¼", "about a quarter of the bars"],
+  ["½", "about half the bars"],
+  ["¾", "about three quarters of the bars"],
+  ["all", "every bar, the first one too"],
+];
+function pushGen(h, prog) {
+  if (!h.gens[h.cur].length) {
+    const gens = [...h.gens];
+    gens[h.cur] = prog;
+    return { gens, cur: h.cur };
+  }
+  const gens = [...h.gens, prog].slice(-MAX_GENS);
+  return { gens, cur: gens.length - 1 };
+}
+
+// a seeded PRNG (mulberry32): a queued mutation is re-derived from the current
+// progression on every render until it lands, so edits made while it waits are
+// carried into it — and the seed keeps it the same mutation throughout
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const newSeed = () => Math.floor(Math.random() * 2 ** 31);
+
 const optKey = (o) => `${o.roman}:${o.rootPc}:${o.intervals.join("-")}`;
 
 // --- filtering the futures ---
@@ -349,6 +396,8 @@ function encodeState(s) {
   if (s.arpOrder === "random") p.set("ao", "rnd");
   if (s.holdBass) p.set("bh", "1");
   if (s.loop) p.set("lp", "1");
+  if (s.evolve) p.set("ev", "1");
+  if (s.mutLevel !== 1) p.set("ml", s.mutLevel); // shapes what Evolve does, so it travels
   if (s.susOn) p.set("su", "1");
   if (s.tempo !== 96) p.set("t", s.tempo);
   // the sound travels with the link — a progression you designed a patch for
@@ -387,6 +436,8 @@ function decodeState(search) {
   const arpOrder = p.get("ao") === "rnd" ? "random" : "rise";
   const holdBass = p.get("bh") === "1";
   const loop = p.get("lp") === "1";
+  const evolve = p.get("ev") === "1";
+  const mutLevel = clampNum(p.get("ml"), 1, 1, 4);
   const susOn = p.get("su") === "1";
   const tempo = clampNum(p.get("t"), 96, 60, 140);
   const sound = unpackSynth(p.get("sy")); // clamps per parameter; absent → default
@@ -417,7 +468,7 @@ function decodeState(search) {
   // decorated through the engine, so a reconstituted chord carries exactly the
   // fields a chosen or suggested one does
   const chain = decorateChain(prog, mode).map((c, i) => ({ ...c, id: i + 1 }));
-  return { root, mode, add7, voiceLead, bass, arp, arpFour, arpOrder, holdBass, loop, susOn, tempo, sound, prog: chain };
+  return { root, mode, add7, voiceLead, bass, arp, arpFour, arpOrder, holdBass, loop, evolve, mutLevel, susOn, tempo, sound, prog: chain };
 }
 
 export default function ChordExplorer() {
@@ -432,11 +483,30 @@ export default function ChordExplorer() {
   const [arpOrder, setArpOrder] = useState(boot.arpOrder ?? "rise");
   const [holdBass, setHoldBass] = useState(boot.holdBass ?? false);
   const [loop, setLoop] = useState(boot.loop ?? false);
+  const [evolve, setEvolve] = useState(boot.evolve ?? false);
+  // how much Mutate (and so Evolve) changes: that many quarters of the bars
+  const [mutLevel, setMutLevel] = useState(boot.mutLevel ?? 1);
   const [susOn, setSusOn] = useState(boot.susOn ?? false);
   const [tempo, setTempo] = useState(boot.tempo ?? 96);
   const [sound, setSound] = useState(boot.sound ?? defaultSound());
   const [soundOpen, setSoundOpen] = useState(false);
-  const [prog, setProg] = useState(boot.prog ?? []);
+  // Progressions come in generations (see pushGen); `cur` is the one on the
+  // roll. Per visit, not in the URL — a link carries only the current one.
+  const [hist, setHist] = useState(() => ({ gens: [boot.prog ?? []], cur: 0 }));
+  const prog = hist.gens[hist.cur];
+  // hand edits: change the current generation in place
+  const setProg = useCallback(
+    (u) =>
+      setHist((h) => {
+        const p = h.gens[h.cur];
+        const next = typeof u === "function" ? u(p) : u;
+        if (next === p) return h;
+        const gens = [...h.gens];
+        gens[h.cur] = next;
+        return { ...h, gens };
+      }),
+    []
+  );
   const [playingIdx, setPlayingIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false); // read inside scheduled callbacks and effects
@@ -478,9 +548,9 @@ export default function ChordExplorer() {
   // out every render, and it's what Share copies — so a share never lags the
   // page, however recently something changed.
   const path = useMemo(() => {
-    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, arpFour, arpOrder, holdBass, loop, susOn, tempo, sound, prog });
+    const qs = encodeState({ root, mode, add7, voiceLead, bass: bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, mutLevel, susOn, tempo, sound, prog });
     return qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
-  }, [root, mode, add7, voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, susOn, tempo, sound, prog]);
+  }, [root, mode, add7, voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, mutLevel, susOn, tempo, sound, prog]);
 
   // Written to the address bar behind a short debounce, not on every change. A
   // slider drag changes state every frame, and Safari allows 100 replaceState
@@ -569,6 +639,42 @@ export default function ChordExplorer() {
     () => voicings.map((v, i) => ({ upper: v, bass: bass ? bass[i] : null })),
     [bass, voicings]
   );
+  // What plays when the loop next comes round, instead of this: a mutation, a
+  // suggestion, or a generation picked from the history. A mutation is derived
+  // from the current progression right up until it lands (same seed, so the
+  // same mutation), which is what carries edits made while it waits into it.
+  const [queued, setQueued] = useState(null);
+  const nextProg = useMemo(() => {
+    if (!queued) return null;
+    if (queued.kind === "mutate") {
+      // the generation before this one, so a mutation doesn't just undo the last
+      const previous = hist.cur > 0 ? hist.gens[hist.cur - 1] : null;
+      // the level read live too, so changing it while a mutation waits applies
+      return mutateLoop(prog, key, { rand: seededRandom(queued.seed), level: mutLevel, previous });
+    }
+    if (queued.kind === "suggest") return queued.prog;
+    return hist.gens[queued.idx] ?? null;
+  }, [queued, prog, key, hist.gens, hist.cur, mutLevel]);
+  const nextPlayed = useMemo(
+    () => (nextProg ? realise(nextProg, voiceLead, bassOn) : null),
+    [nextProg, voiceLead, bassOn]
+  );
+  // what the playback tick reads: assigned during render, so it is never a
+  // passive effect behind the state (the tick swaps it itself on arrival)
+  const liveRef = useRef(null);
+  liveRef.current = {
+    played,
+    next: nextProg && nextProg.length ? { queued, prog: nextProg, played: nextPlayed } : null,
+  };
+
+  // make a queued progression the current one: a history pick just moves the
+  // cursor; anything new becomes a generation, fresh chords getting ids
+  const land = useCallback((q, p) => {
+    if (q.kind === "goto") return setHist((h) => ({ ...h, cur: q.idx }));
+    const withIds = p.map((c) => (c.id != null ? c : { ...c, id: ++uid.current }));
+    setHist((h) => pushGen(h, withIds));
+  }, []);
+
   // a chord about to be added (preview, choose) gets the bass it would have
   const withBass = useCallback(
     (midi, rootPc) => ({
@@ -662,8 +768,14 @@ export default function ChordExplorer() {
       );
       timers.current.push(setTimeout(() => setSpawn(null), EXIT_MS + SPAWN_MS + 400));
     },
-    [exiting, voiceLead, voicings, playVoiced, prog.length, withBass]
+    [exiting, voiceLead, voicings, playVoiced, prog.length, withBass, setProg]
   );
+
+  const gensRef = useRef(null);
+  useEffect(() => {
+    const el = gensRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [hist.gens.length, nextProg]);
 
   // keep the newest column parked against the futures list as the roll grows
   useEffect(() => {
@@ -691,13 +803,17 @@ export default function ChordExplorer() {
     });
   }, [spawn]);
 
-  // Playback runs on Tone's Transport rather than scheduling a pass up front:
-  // looping needs a Stop that lands now, not at the end of the current cycle,
-  // and Transport.cancel() is the only thing that unschedules what's queued.
-  // Events are placed in Transport time (beats), so the tempo slider rescales
-  // them mid-flight instead of applying only on the next Play.
+  // Playback runs on Tone's Transport as one repeating tick per chord slot, and
+  // each tick reads the progression *live* (liveRef) at a cursor. So an edit made
+  // while it plays — an inversion, a reorder, a chord added or removed — is just
+  // heard on the next slot, and the loop never breaks pace. The one place the
+  // progression is swapped is the end of a cycle: a queued suggestion, mutation
+  // or history pick lands there, on the beat. Transport time (beats) means the
+  // tempo slider rescales a run in flight; Transport.cancel() is what makes a
+  // Stop land now.
   const STEP = 2; // one chord = a half note = two beats
   const atBeat = (n) => `0:${n}:0`;
+  const cursor = useRef(0);
 
   const stopPlayback = useCallback(() => {
     const t = Tone.getTransport();
@@ -710,7 +826,12 @@ export default function ChordExplorer() {
     playingRef.current = false;
     setPlaying(false);
     setPlayingIdx(-1);
-  }, [release, midiPanic]);
+    // something you asked for lands now rather than being lost; an Evolve
+    // mutation was only ever for the next time round, so it goes
+    const n = liveRef.current.next;
+    if (n && !n.queued.auto) land(n.queued, n.prog);
+    setQueued(null);
+  }, [release, midiPanic, land]);
 
   const playAll = useCallback(async () => {
     if (playingRef.current) return stopPlayback(); // the button is Play/Stop
@@ -718,39 +839,56 @@ export default function ChordExplorer() {
     if (!(await ensure())) return;
     const t = Tone.getTransport();
     t.cancel();
+    t.loop = false;
     t.bpm.value = tempo;
-    prog.forEach((c, i) => {
-      t.schedule((time) => {
-        // through a ref, not the closure: a scheduled callback would otherwise
-        // keep the playVoiced it was built with, so switching MIDI output or
-        // toggling Arpeggio mid-run would go nowhere until the next Play
-        // duration read at fire time, so a tempo change lands on the next chord
-        const slot = Tone.Time(atBeat(STEP)).toSeconds();
-        playVoicedRef.current(played[i], slot * 0.92, time, slot);
-        Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
-      }, atBeat(i * STEP));
-    });
-    const end = atBeat(prog.length * STEP);
-    // always armed, and guarded by the live loop flag — so turning Loop off
-    // mid-cycle still ends the run, and turning it on never trips the stop
-    t.schedule((time) => {
-      if (!loopRef.current) Tone.getDraw().schedule(() => stopPlayback(), time);
-    }, end);
-    t.loopStart = 0;
-    t.loopEnd = end;
-    t.loop = loop;
+    cursor.current = 0;
+    t.scheduleRepeat((time) => {
+      const live = liveRef.current;
+      let i = cursor.current;
+      if (i >= live.played.length) {
+        // the end of a cycle. Loop's flag is read here, live, so turning it off
+        // mid-cycle ends the run at this cycle's end
+        if (!loopRef.current || !live.played.length) {
+          Tone.getDraw().schedule(() => stopRef.current(), time);
+          return;
+        }
+        if (live.next) {
+          // swap now, in the callback — Tone runs it ~100ms ahead of the audio,
+          // and waiting on React would play bar 1 of the old progression
+          const { queued: q, prog: p, played: pl } = live.next;
+          live.played = pl;
+          live.next = null;
+          land(q, p);
+          setQueued(null);
+        }
+        i = 0;
+      }
+      // duration read at fire time, so a tempo change lands on the next chord;
+      // through a ref, so a MIDI port or Arpeggio change reaches a run in flight
+      const slot = Tone.Time(atBeat(STEP)).toSeconds();
+      playVoicedRef.current(live.played[i], slot * 0.92, time, slot);
+      Tone.getDraw().schedule(() => setPlayingIdx(i), time); // visuals on the audio clock
+      cursor.current = i + 1;
+    }, atBeat(STEP), 0);
     t.position = 0;
     playingRef.current = true;
     setPlaying(true);
     t.start();
-  }, [prog, tempo, loop, ensure, played, stopPlayback]);
+  }, [prog.length, tempo, ensure, stopPlayback, land]);
 
   // the toggles reach into a run already in progress
   useEffect(() => { Tone.getTransport().bpm.value = tempo; }, [tempo]);
+  useEffect(() => { loopRef.current = loop; }, [loop]);
+
+  // Evolve: whenever a run is looping with nothing queued, queue a mutation for
+  // next time round. It lands, the queue empties, and this queues the next one.
   useEffect(() => {
-    loopRef.current = loop;
-    if (playingRef.current) Tone.getTransport().loop = loop;
-  }, [loop]);
+    if (evolve && loop && playing && !queued && prog.length > 1) {
+      setQueued({ kind: "mutate", seed: newSeed(), auto: true });
+    } else if (queued?.auto && !(evolve && loop)) {
+      setQueued(null); // Evolve or Loop turned off: stay on this one
+    }
+  }, [evolve, loop, playing, queued, prog.length]);
 
   // Held in a ref so neither effect below lists stopPlayback as a dependency:
   // its identity changes with the chosen MIDI port, which would otherwise fire
@@ -763,10 +901,11 @@ export default function ChordExplorer() {
     playVoicedRef.current = playVoiced;
   });
 
-  // editing the progression invalidates what's scheduled against it
+  // a new key empties the progression and the history with it — the one change
+  // that stops a run rather than being heard on the next slot
   useEffect(() => {
     if (playingRef.current) stopRef.current();
-  }, [prog, root, mode, add7, voiceLead, bassOn]);
+  }, [root, mode]);
   useEffect(() => () => stopRef.current(), []); // and stop on unmount, only
 
   // --- reordering and removing chords -------------------------------------
@@ -787,9 +926,9 @@ export default function ChordExplorer() {
       next.splice(to, 0, ...next.splice(from, 1));
       return next;
     });
-  }, []);
+  }, [setProg]);
 
-  const removeChord = useCallback((i) => setProg((p) => p.filter((_, j) => j !== i)), []);
+  const removeChord = useCallback((i) => setProg((p) => p.filter((_, j) => j !== i)), [setProg]);
 
   const onDragStart = useCallback((i, e) => {
     if (e.button !== 0) return;
@@ -874,13 +1013,32 @@ export default function ChordExplorer() {
 
   // walk the transition graph for a loop that comes round again
   const [bars, setBars] = useState(4);
+  // While playing, Suggest and Mutate queue their result for when the loop comes
+  // round rather than cutting in; pressing again re-rolls what's queued.
   const suggest = useCallback(() => {
-    setProg(suggestLoop(key, { bars }).map((c) => ({ ...c, id: ++uid.current })));
+    const p = suggestLoop(key, { bars }).map((c) => ({ ...c, id: ++uid.current }));
     setQuery("");
+    if (playingRef.current) setQueued({ kind: "suggest", prog: p });
+    else setHist((h) => pushGen(h, p));
   }, [key, bars]);
+  const mutate = useCallback(() => {
+    if (prog.length < 2) return;
+    if (playingRef.current) setQueued({ kind: "mutate", seed: newSeed() });
+    else land({ kind: "mutate" }, mutateLoop(prog, key, { level: mutLevel, previous: hist.gens[hist.cur - 1] }));
+  }, [prog, key, land, hist, mutLevel]);
+  // back (or forward) through the history — queued too, while playing; the one
+  // already playing un-queues whatever was waiting
+  const goto = useCallback(
+    (idx) => {
+      if (!playingRef.current) return setHist((h) => ({ ...h, cur: idx }));
+      setQueued(idx === hist.cur ? null : { kind: "goto", idx });
+    },
+    [hist.cur]
+  );
 
   const undo = () => setProg((p) => p.slice(0, -1));
-  const clear = () => setProg([]);
+  // a fresh page, keeping the old one in the history
+  const clear = () => setHist((h) => pushGen(h, []));
 
   // inversion scrolling: nudge one chord's register by an octave at its extreme,
   // and play the result so the change is audible
@@ -898,9 +1056,15 @@ export default function ChordExplorer() {
         playVoiced({ upper, bass: bassLine(edited)[i] }, 0.8);
       }
     },
-    [voicings, bassOn, prog, playVoiced]
+    [voicings, bassOn, prog, playVoiced, setProg]
   );
-  const changeKey = (r, m) => { setRoot(r); setMode(m); setProg([]); setQuery(""); };
+  const changeKey = (r, m) => {
+    setRoot(r);
+    setMode(m);
+    setHist({ gens: [[]], cur: 0 }); // other keys' progressions would read wrong here
+    setQueued(null);
+    setQuery("");
+  };
 
   const [copied, setCopied] = useState(false);
   const share = useCallback(async () => {
@@ -1007,7 +1171,7 @@ export default function ChordExplorer() {
             <button
               className="ce-toggle"
               onClick={suggest}
-              title={`Propose a ${bars}-bar loop — click again to re-roll. Replaces the progression.`}
+              title={`Propose a ${bars}-bar loop — click again to re-roll. The one it replaces stays in the history; while playing, it waits for the loop to come round.`}
             >
               Suggest
             </button>
@@ -1019,6 +1183,27 @@ export default function ChordExplorer() {
             >
               {[2, 4, 8].map((b) => (
                 <option key={b} value={b}>{b} bars</option>
+              ))}
+            </select>
+          </span>
+
+          <span className="ce-suggest">
+            <button
+              className="ce-toggle"
+              onClick={mutate}
+              disabled={prog.length < 2}
+              title={`Change ${MUT_LEVELS[mutLevel - 1][1]}${mutLevel < 4 ? ", keeping bar 1 and your edits" : ""}. The original stays in the history; while playing, the change waits for the loop to come round.`}
+            >
+              Mutate
+            </button>
+            <select
+              value={mutLevel}
+              onChange={(e) => setMutLevel(Number(e.target.value))}
+              aria-label="How much a mutation changes"
+              title="How much Mutate changes — Evolve uses this too"
+            >
+              {MUT_LEVELS.map(([label], i) => (
+                <option key={i} value={i + 1}>{label}</option>
               ))}
             </select>
           </span>
@@ -1098,6 +1283,18 @@ export default function ChordExplorer() {
             title="Repeat the progression until you press Stop"
           >
             Loop
+          </button>
+
+          <button
+            className={"ce-toggle" + (evolve ? " on" : "")}
+            aria-pressed={evolve}
+            disabled={!loop}
+            onClick={() => setEvolve((v) => !v)}
+            title={loop
+              ? "Mutate the progression every time the loop comes round, so it keeps changing while it plays. Every version stays in the history"
+              : "Mutates the loop each time it comes round — turn Loop on to use it"}
+          >
+            Evolve
           </button>
 
           <label className="ce-field">
@@ -1187,6 +1384,42 @@ export default function ChordExplorer() {
             <button onClick={clear} disabled={!prog.length}>Clear</button>
           </div>
         </div>
+
+        {/* every progression this visit, oldest on the left; what's queued for
+            when the loop comes round sits on the right, dashed */}
+        {(hist.gens.length > 1 || liveRef.current.next) && (
+          <ol className="ce-gens" ref={gensRef} aria-label="Progression history">
+            {hist.gens.map((g, i) => {
+              const waiting = queued?.kind === "goto" && queued.idx === i;
+              return (
+                <li key={i}>
+                  <button
+                    className={"ce-gen" + (i === hist.cur ? " on" : "") + (waiting ? " next" : "")}
+                    aria-current={i === hist.cur ? "true" : undefined}
+                    onClick={() => goto(i)}
+                    title={i === hist.cur
+                      ? playing && queued ? "Stay on this one: drop what's waiting" : "Playing now"
+                      : playing ? "Play this one when the loop comes round" : "Go back to this one"}
+                  >
+                    {waiting && <span className="ce-gen-tag">next</span>}
+                    <GenNames prog={g} />
+                  </button>
+                </li>
+              );
+            })}
+            {liveRef.current.next && queued.kind !== "goto" && (
+              <li>
+                <span
+                  className="ce-gen ghost"
+                  title={queued.auto ? "Evolve: plays when the loop comes round" : "Plays when the loop comes round"}
+                >
+                  <span className="ce-gen-tag">next</span>
+                  <GenNames prog={nextProg} against={prog} />
+                </span>
+              </li>
+            )}
+          </ol>
+        )}
 
         {blocked && !noSoundDismissed && (
           <div className="ce-nosound" role="status">
@@ -1529,6 +1762,21 @@ const Chevron = ({ up }) => (
     />
   </svg>
 );
+
+// a generation as a strip of chord names, each underlined in its function's
+// colour; against another progression, the bars that differ are marked
+function GenNames({ prog, against }) {
+  if (!prog.length) return <span className="ce-gen-empty">empty</span>;
+  return prog.map((c, i) => (
+    <span
+      key={i}
+      className={"ce-gen-chord" + (against && against[i]?.name !== c.name ? " changed" : "")}
+      style={{ "--c": HUE[hueOf(c.func)] }}
+    >
+      {c.name}
+    </span>
+  ));
+}
 
 function PianoRoll({
   prog, voicings, bass, playingIdx, keyRoot, spawn, colsRef, dragIdx, dragMoved,
@@ -1911,6 +2159,23 @@ const CSS = `
 .ce-suggest .ce-toggle:hover, .ce-suggest select:hover{color:var(--ink);}
 .ce-transport button:first-child{background:var(--ink); color:var(--panel); border-color:var(--ink);}
 .ce-transport button:first-child:disabled{background:var(--bg); color:var(--ink);}
+/* the history strip: one chip per generation, newest (and what's queued) on the right */
+.ce-gens{display:flex; gap:6px; list-style:none; margin:0 0 10px; padding:0 0 2px; overflow-x:auto;}
+.ce-gens li{flex:0 0 auto;}
+.ce-gen{
+  display:inline-flex; align-items:baseline; gap:6px; padding:5px 9px; border-radius:8px;
+  font-family:var(--mono); font-size:11px; color:var(--muted);
+  border:1px solid var(--line); background:var(--bg); cursor:pointer; opacity:.75;
+}
+.ce-gen:hover{opacity:1; color:var(--ink);}
+.ce-gen.on{opacity:1; color:var(--ink); background:var(--panel); border-color:var(--ink);}
+.ce-gen.next, .ce-gen.ghost{opacity:1; border-style:dashed; border-color:var(--ink); color:var(--ink);}
+.ce-gen.ghost{cursor:default; background:transparent;}
+.ce-gen-chord{border-bottom:2px solid var(--c); padding-bottom:1px;}
+.ce-gen-chord.changed{font-weight:600;}
+.ce-gen-tag{font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted);}
+.ce-gen-empty{font-style:italic;}
+button.ce-toggle:disabled{opacity:.4; cursor:default;}
 .ce-transport button.ce-playing{background:var(--tension); border-color:var(--tension); color:var(--panel);}
 .ce-share.copied:not(:disabled){background:var(--ink); color:var(--panel); border-color:var(--ink);}
 

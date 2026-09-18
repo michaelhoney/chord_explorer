@@ -651,24 +651,89 @@ export function suggestLoop(key, { bars = 4, rand = Math.random } = {}) {
     let cands = pool.filter((c) => !excluded(c));
     if (!cands.length) cands = pool.filter((c) => c.rootPc !== prev.rootPc);
     const seen = new Set(chords.map((c) => c.rootPc));
-    const weights = cands.map((c) => {
-      let w = score(prev.func, c) * salience(key.mode, c);
-      // a loop wants somewhere to go. Without these two the walk oscillates —
-      // the tonic's salience is high enough to pull it back every other bar,
-      // which is how you get I V7/ii I V instead of a progression.
-      if (seen.has(c.rootPc)) w *= 0.3;
-      if (last) {
-        // the last bar has to hand back to the top of the loop
-        if (c.func === "dominant") w *= 3;
-        else if (c.func === "predominant" || c.func === "subtonic") w *= 1.6;
-        else w *= 0.5;
-        if (c.resolvesTo === tonic.rootPc) w *= 2;
-      } else if (c.rootPc === tonic.rootPc) {
-        w *= 0.2; // home mid-loop kills the movement; it already ends there
-      }
-      return w;
-    });
+    const weights = cands.map((c) => loopWeight(key.mode, prev, c, { last, seen, home: tonic.rootPc }));
     chords.push(pickWeighted(cands, weights, rand));
   }
   return decorateChain(chords, key.mode);
+}
+
+// How much a loop wants `c` after `prev`. Shared by suggestLoop and mutateLoop,
+// so a mutation is idiomatic for exactly the reasons a suggestion is. `home` is
+// the root of bar 1, which the last bar hands back to.
+function loopWeight(mode, prev, c, { last, seen, home }) {
+  let w = score(prev.func, c) * salience(mode, c);
+  // a loop wants somewhere to go. Without these two the walk oscillates —
+  // the tonic's salience is high enough to pull it back every other bar,
+  // which is how you get I V7/ii I V instead of a progression.
+  if (seen.has(c.rootPc)) w *= 0.3;
+  if (last) {
+    // the last bar has to hand back to the top of the loop
+    if (c.func === "dominant") w *= 3;
+    else if (c.func === "predominant" || c.func === "subtonic") w *= 1.6;
+    else w *= 0.5;
+    if (c.resolvesTo === home) w *= 2;
+  } else if (c.rootPc === home) {
+    w *= 0.2; // home mid-loop kills the movement; it already ends there
+  }
+  return w;
+}
+
+// A loop that changes rather than being replaced: `level` quarters of the bars
+// (1–4, at least one) are re-picked for how well they sit between their
+// neighbours. Levels 1–3 never touch bar 1, which is what keeps a mutation
+// sounding like the same loop; level 4 is the extreme one and re-picks every
+// bar, bar 1 included, so the loop needn't even start at home any more.
+// Each bar is judged by its neighbours — led into from the bar before, leading on to the bar after,
+// the last bar's "after" being bar 1 again. Everything not re-picked is kept
+// as it came in, hand edits included: an inversion (`inv`), a chord chosen by
+// hand, and its `id`. A re-picked chord arrives without an id, which is how the
+// caller can tell which bars changed. The same rules as suggestLoop keep it
+// moving (no repeat of a neighbour, no A–B–A on interior bars), and a re-pick
+// always changes the root, or it wouldn't be heard as a change. Given the
+// `previous` generation, a re-pick also won't put back what that bar held last
+// time — without it, evolving a 4-bar loop one bar at a time mostly flips the
+// same bar back and forth. `rand` is injected, as in suggestLoop.
+export function mutateLoop(prog, key, { rand = Math.random, level = 1, previous } = {}) {
+  const n = prog.length;
+  if (n < 2) return decorateChain(prog, key.mode);
+  const lv = Math.min(4, Math.max(1, Math.round(level)));
+  // which bars: every one at level 4; otherwise a shuffle of 1..n-1, first k
+  // taken. Worked left to right so each re-pick sees the ones before it
+  let chosen;
+  if (lv === 4) {
+    chosen = prog.map((_, i) => i);
+  } else {
+    const k = Math.min(n - 1, Math.max(1, Math.round((n * lv) / 4)));
+    const slots = Array.from({ length: n - 1 }, (_, i) => i + 1);
+    for (let i = slots.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [slots[i], slots[j]] = [slots[j], slots[i]];
+    }
+    chosen = slots.slice(0, k).sort((a, b) => a - b);
+  }
+  const pool = [...key.diatonic, ...key.colour];
+  const out = [...prog];
+  for (const i of chosen) {
+    const home = out[0].rootPc; // read each time: at level 4, bar 1 moves too
+    const prev = out[(i - 1 + n) % n]; // bar 1's "before" is the last bar
+    const next = out[(i + 1) % n];
+    const was = out[i];
+    const last = i === n - 1;
+    const near = (c) => c.rootPc === prev.rootPc || c.rootPc === next.rootPc || c.rootPc === was.rootPc;
+    const undoes = (c) => previous?.[i] != null && c.rootPc === previous[i].rootPc;
+    // A–B–A either side: interior bars only, the last bar is exempt as in suggestLoop
+    const bounce = (c) =>
+      (!last && i >= 2 && c.rootPc === out[i - 2].rootPc) ||
+      (i + 2 < n - 1 && c.rootPc === out[i + 2].rootPc);
+    let cands = pool.filter((c) => !near(c) && !bounce(c) && !undoes(c) && !(last && c.rootPc === home));
+    if (!cands.length) cands = pool.filter((c) => !near(c) && !undoes(c));
+    if (!cands.length) cands = pool.filter((c) => !near(c));
+    if (!cands.length) continue; // nothing fits between these two; leave the bar be
+    const seen = new Set(out.filter((_, j) => j !== i).map((c) => c.rootPc));
+    const weights = cands.map(
+      (c) => loopWeight(key.mode, prev, c, { last, seen, home }) * score(c.func, next)
+    );
+    out[i] = pickWeighted(cands, weights, rand);
+  }
+  return decorateChain(out, key.mode);
 }

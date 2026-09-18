@@ -5,6 +5,7 @@ import {
   resolveKey,
   suspensionsFor,
   suggestLoop,
+  mutateLoop,
   decorateChain,
   optionsFrom,
   rootPositionMidi,
@@ -423,6 +424,120 @@ describe("suggestLoop", () => {
         }
       }
     }
+  });
+});
+
+describe("mutateLoop", () => {
+  const keys = [
+    [C, "major"],
+    [9, "minor"],
+    [7, "mixolydian"],
+  ];
+
+  it("keeps bar 1 and the length, and changes level quarters of the bars", () => {
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      for (const bars of [2, 4, 8]) {
+        for (let seed = 0; seed < 20; seed++) {
+          const loop = suggestLoop(key, { bars, rand: seeded(seed) }).map((c, i) => ({ ...c, id: i + 1 }));
+          for (const level of [1, 2, 3]) {
+            const next = mutateLoop(loop, key, { rand: seeded(seed + 1000), level });
+            expect(next).toHaveLength(bars);
+            expect(next[0]).toMatchObject({ id: 1, rootPc: loop[0].rootPc });
+            const changed = next.filter((c) => c.id == null).length;
+            expect(changed).toBeGreaterThanOrEqual(1);
+            expect(changed).toBeLessThanOrEqual(Math.min(bars - 1, Math.max(1, Math.round((bars * level) / 4))));
+            // a re-picked bar is heard as a change: it moves the root
+            next.forEach((c, i) => {
+              if (c.id == null) expect(c.rootPc).not.toBe(loop[i].rootPc);
+            });
+          }
+        }
+      }
+    }
+  });
+
+  it("carries hand edits forward on the bars it keeps", () => {
+    const key = buildKey(C, "major");
+    const [I, ii, , IV, V] = key.diatonic;
+    const loop = [I, IV, ii, V].map((c, i) => ({ ...c, id: i + 1, inv: i - 1 }));
+    for (let seed = 0; seed < 20; seed++) {
+      const next = mutateLoop(loop, key, { rand: seeded(seed) });
+      next.forEach((c, i) => {
+        if (c.id != null) expect(c.inv).toBe(loop[i].inv);
+        else expect(c.inv ?? 0).toBe(0);
+      });
+    }
+  });
+
+  it("keeps moving: no neighbour repeats, including round the loop", () => {
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      for (let seed = 0; seed < 60; seed++) {
+        let loop = suggestLoop(key, { bars: 4, rand: seeded(seed) }).map((c, i) => ({ ...c, id: i + 1 }));
+        // evolve it a few generations, the way the Evolve toggle would
+        for (let g = 0; g < 5; g++) {
+          loop = mutateLoop(loop, key, { rand: seeded(seed * 7 + g) }).map((c, i) => ({ ...c, id: c.id ?? 100 + i }));
+          const roots = loop.map((c) => c.rootPc);
+          for (let i = 0; i < roots.length; i++) {
+            expect(roots[i]).not.toBe(roots[(i + 1) % roots.length]);
+          }
+        }
+      }
+    }
+  });
+
+  it("is a pure function of its inputs, and arrives decorated", () => {
+    const key = buildKey(C, "major");
+    const loop = suggestLoop(key, { bars: 8, rand: seeded(3) });
+    const a = mutateLoop(loop, key, { rand: seeded(5) });
+    const b = mutateLoop(loop, key, { rand: seeded(5) });
+    expect(a.map((c) => c.name)).toEqual(b.map((c) => c.name));
+    for (const c of a) {
+      expect(typeof c.func).toBe("string");
+      expect(typeof c.tension).toBe("number");
+      expect(typeof c.move).toBe("string");
+    }
+  });
+
+  it("doesn't put back what a bar held a generation ago", () => {
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      for (let seed = 0; seed < 40; seed++) {
+        let previous = null;
+        let loop = suggestLoop(key, { bars: 4, rand: seeded(seed) }).map((c, i) => ({ ...c, id: i + 1 }));
+        for (let g = 0; g < 6; g++) {
+          const next = mutateLoop(loop, key, { rand: seeded(seed * 11 + g), previous });
+          next.forEach((c, i) => {
+            if (c.id == null && previous) expect(c.rootPc).not.toBe(previous[i].rootPc);
+          });
+          previous = loop;
+          loop = next.map((c, i) => ({ ...c, id: c.id ?? 100 * (g + 1) + i }));
+        }
+      }
+    }
+  });
+
+  it("at level 4, changes every bar — bar 1 included — and still keeps moving", () => {
+    for (const [root, mode] of keys) {
+      const key = buildKey(root, mode);
+      for (const bars of [2, 4, 8]) {
+        for (let seed = 0; seed < 40; seed++) {
+          const loop = suggestLoop(key, { bars, rand: seeded(seed) }).map((c, i) => ({ ...c, id: i + 1 }));
+          const next = mutateLoop(loop, key, { rand: seeded(seed + 7), level: 4 });
+          expect(next.every((c) => c.id == null)).toBe(true);
+          next.forEach((c, i) => expect(c.rootPc).not.toBe(loop[i].rootPc));
+          const roots = next.map((c) => c.rootPc);
+          for (let i = 0; i < bars; i++) expect(roots[i]).not.toBe(roots[(i + 1) % bars]);
+        }
+      }
+    }
+  });
+
+  it("leaves a single chord alone", () => {
+    const key = buildKey(C, "major");
+    const one = [{ ...key.diatonic[0], id: 1 }];
+    expect(mutateLoop(one, key, { rand: seeded(1) }).map((c) => c.name)).toEqual(["C"]);
   });
 });
 

@@ -246,23 +246,42 @@ The engine, reading top to bottom:
   page (Chrome just throttles, with a warning). `writeUrl` swallows a failed write regardless;
   a lagging address bar is cosmetic. Share copies the computed `path`, not `location.href`,
   so it never copies a URL that's up to 300ms stale.
-- **Playback runs on `Tone.getTransport()`**, not a pass scheduled up front. The Loop toggle
-  forced this: a loop needs a Stop that lands *now*, and `Transport.cancel()` is the only
-  thing that unschedules what's queued. Events are placed in Transport time (`0:beat:0`),
-  so the tempo slider rescales a run already in flight. The end-of-run stop is **always**
-  scheduled and guarded by `loopRef.current`, which is what makes both directions work live:
-  turning Loop off mid-cycle ends the run at that cycle's end, turning it on never trips the
-  stop. Scheduled callbacks call **`playVoicedRef.current`**, never the closure: a Transport
-  callback keeps whatever `playVoiced` it was built with, so switching MIDI output or
-  toggling Arpeggio mid-run would do nothing until the next Play. Same reason `stopPlayback`
-  lives in a ref — listing it as an effect dependency makes the cleanup fire on every port
-  change, silently stopping playback and panicking the port twice.
-  `playingRef` / `loopRef` shadow the state because scheduled callbacks and the
-  invalidation effect would otherwise close over stale values — and depending on `playing`
-  in that effect would stop playback the instant it started. Editing the progression (or the
-  key) stops playback, since the schedule is built against a specific `voicings`.
+- **Playback runs on `Tone.getTransport()`** as **one repeating tick per chord slot**
+  (`scheduleRepeat`), and each tick reads the progression *live* from `liveRef` at a
+  `cursor`. So an edit made while it plays (an inversion, a reorder, a chord added or
+  removed, voice-leading or bass toggled) is just heard on the next slot, and the loop never
+  breaks pace. Only a key/mode change stops a run. `liveRef` is assigned **during render**,
+  not in an effect, so it is never a passive effect behind the state. The **end of a cycle**
+  is the one place the progression is swapped: a queued progression lands there, and the
+  swap happens *inside the tick* (`live.played = next.played`, then `land()`), because Tone
+  runs callbacks ~100ms ahead of the audio and waiting on React would play bar 1 of the old
+  one. Loop is read there too, via `loopRef`, so turning it off mid-cycle ends the run at
+  that cycle's end. Events are in Transport time, so tempo rescales a run in flight.
+  Scheduled callbacks call **`playVoicedRef.current`** and **`stopRef.current`**, never the
+  closures — a MIDI port or Arpeggio change must reach a run in flight, and listing
+  `stopPlayback` as an effect dependency would stop playback on every port change.
+- **Generations, the queue, Mutate and Evolve.** State is `hist = { gens, cur }`; `prog` is
+  `gens[cur]` and `setProg` edits it in place, so hand edits never add history. Suggest,
+  Mutate, Evolve and Clear add a generation (`pushGen`; an empty current one is written over,
+  capped at `MAX_GENS`). The history is per visit and **not in the URL**; a key change resets
+  it. While playing, Suggest, Mutate and a history pick don't cut in: they set **`queued`**
+  (`suggest | mutate | goto`), shown dashed at the right of the `.ce-gens` strip, and land at
+  the end of the cycle. Stop lands anything you queued rather than dropping it. A queued
+  **mutation is derived, not stored**: `nextProg` re-runs `mutateLoop(prog, key, { rand:
+  seededRandom(seed), previous })` every render until it lands, so edits made while it waits
+  are carried into it, and the seed keeps it the same mutation. **Evolve** (`ev=1`, needs
+  Loop) is an effect that queues an `auto` mutation whenever a looping run has nothing
+  queued; Stop drops an `auto` one, since it was only ever for next time round.
+  The **mutation level** (the select beside Mutate, `ml=` when not 1) is 1–4 quarters of
+  the bars, read live, so Evolve and a waiting mutation both follow it.
+  **`mutateLoop`** (in `harmony.js`) re-picks `level` quarters of the bars (at least one).
+  Levels 1–3 never touch bar 1; level 4 is deliberately the extreme setting and re-picks
+  **every** bar, bar 1 included, so the loop needn't start at home any more. It picks with the
+  same `loopWeight` as `suggestLoop` (times how well the pick leads into the next bar), keeps
+  every other bar as it was, `inv` and `id` included, and won't put back what a bar held in
+  the `previous` generation. Without that, evolving a 4-bar loop flips one bar back and forth.
 - **Component + `FutureList` / `FutureRow` + `PianoRoll`** — state is `root, mode, add7,
-  voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, tempo, prog, playingIdx, playing`, plus `exiting` / `spawn` for the
+  voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, tempo, hist, queued, playingIdx, playing`, plus `exiting` / `spawn` for the
   choose choreography. **Arpeggio** makes `playVoiced` play one note per step, the steps
   spread evenly across the chord's slot (`span` — the whole slot in playback, so the last step
   runs straight into the next chord), each note gated to 0.9 of its step with the envelope's
@@ -418,9 +437,8 @@ Roughly in order of fun (see README for detail):
 8. **Random start** — a naked URL (no query string) opens in a random key, major or minor,
    with a 4-bar `suggestLoop` already in the progression, so a first visit starts with
    something to play rather than an empty page. A shared link still opens exactly as written.
-9. **Evolve** — a toggle beside Loop: every time the loop comes round, replace the
-   progression with a fresh suggestion of the same length (same key), so a loop keeps
-   changing while it plays.
+9. ✅ **Evolve** — done; **Mutate** (once) and **Evolve** (each time the loop comes round)
+   via `mutateLoop`, with the live-cursor playback, the queue and the history strip.
 
 ### Testing
 
