@@ -323,15 +323,15 @@ function realise(prog, voiceLead, bassOn) {
 // than history, so it's written over instead of kept.
 const MAX_GENS = 24;
 
-// Mutate's levels: that many quarters of the bars. Only "all" touches bar 1
 // Evolve's pace: land a mutation after this many times round
 const EVOLVE_EVERY = [1, 2, 4, 8];
 
+// Mutate's levels: that many quarters of the bars, never bar 1. (The engine's
+// level 4, every bar, isn't offered: it's a new loop, which is Suggest's job.)
 const MUT_LEVELS = [
   ["1/4", "about a quarter of the bars"],
   ["1/2", "about half the bars"],
   ["3/4", "about three quarters of the bars"],
-  ["all", "every bar, the first one too"],
 ];
 function pushGen(h, prog) {
   if (!h.gens[h.cur].length) {
@@ -449,7 +449,7 @@ function decodeState(search) {
   const loop = p.get("lp") !== "0";
   const evolve = loop && p.get("ev") === "1";
   const evolveEvery = EVOLVE_EVERY.includes(Number(p.get("ee"))) ? Number(p.get("ee")) : 1;
-  const mutLevel = clampNum(p.get("ml"), 1, 1, 4);
+  const mutLevel = clampNum(p.get("ml"), 1, 1, 3);
   const susOn = p.get("su") === "1";
   const tempo = clampNum(p.get("t"), 96, 30, 150);
   const sound = unpackSynth(p.get("sy")); // clamps per parameter; absent → default
@@ -500,6 +500,13 @@ export default function ChordExplorer() {
   const [evolveEvery, setEvolveEvery] = useState(boot.evolveEvery ?? 1);
   // Off / Loop / Evolve are one row of keys: Evolve only means anything looping
   const repeat = !loop ? "off" : evolve ? "evolve" : "loop";
+  const repeatStatusTitle = !loop
+    ? "Plays the progression once and stops"
+    : !evolve
+      ? "Loops until you press Stop"
+      : evolveEvery === 1
+        ? "Loops, mutating the progression every time round"
+        : `Loops, mutating the progression every ${evolveEvery} times round`;
   const setRepeat = (v) => {
     setLoop(v !== "off");
     setEvolve(v === "evolve");
@@ -860,6 +867,7 @@ export default function ChordExplorer() {
   const cursor = useRef(0);
   // times round since the progression last changed, for Evolve's pace
   const rounds = useRef(0);
+  const [round, setRound] = useState(0); // the same count, for the display
   const evolveEveryRef = useRef(1);
 
   const stopPlayback = useCallback(() => {
@@ -892,6 +900,7 @@ export default function ChordExplorer() {
     t.bpm.value = tempo;
     cursor.current = 0;
     rounds.current = 0;
+    setRound(0);
     t.scheduleRepeat((time) => {
       const live = liveRef.current;
       let i = cursor.current;
@@ -914,6 +923,8 @@ export default function ChordExplorer() {
           land(q, p);
           setQueued(null);
         }
+        const r = rounds.current;
+        Tone.getDraw().schedule(() => setRound(r), time);
         i = 0;
       }
       // duration read at fire time, so a tempo change lands on the next chord;
@@ -1274,16 +1285,8 @@ export default function ChordExplorer() {
         <section className="ce-mod ce-m-gen" aria-labelledby="ce-h-gen">
           <ModHead n="02" id="ce-h-gen">Generate</ModHead>
           <div className="ce-stack">
-            <div className="ce-row">
-              <Field label="Suggest">
-                <button
-                  className="ce-key"
-                  onClick={suggest}
-                  title={`Propose a ${bars}-bar loop — press again to re-roll. The one it replaces stays in the history; while playing, it waits for the loop to come round.`}
-                >
-                  {SYM.suggest}New loop
-                </button>
-              </Field>
+            {/* how much, then go: the two lines share columns, so the buttons match */}
+            <div className="ce-go">
               <Field label="Bars">
                 <Keys
                   label="Bars in a suggested loop"
@@ -1292,23 +1295,37 @@ export default function ChordExplorer() {
                   options={[2, 4, 8].map((b) => ({ v: b, label: String(b), title: `Suggest ${b}-bar loops` }))}
                 />
               </Field>
-            </div>
-            <div className="ce-row">
-              <Field label="Mutate">
-                <button
-                  className="ce-key"
-                  onClick={mutate}
-                  disabled={prog.length < 2}
-                  title={`Change ${MUT_LEVELS[mutLevel - 1][1]}${mutLevel < 4 ? ", keeping bar 1 and your edits" : ""}. The original stays in the history; while playing, the change waits for the loop to come round.`}
-                >
-                  {SYM.mutate}Once
-                </button>
-              </Field>
+              <button
+                className="ce-key"
+                onClick={suggest}
+                title={`Propose a ${bars}-bar loop — press again to re-roll. The one it replaces stays in the history; while playing, it waits for the loop to come round.`}
+              >
+                {SYM.suggest}Suggest
+              </button>
               <Field label="Amount">
-                <Steps value={mutLevel} onChange={setMutLevel} />
+                <Keys
+                  label="How much a mutation changes"
+                  value={mutLevel}
+                  onChange={setMutLevel}
+                  options={MUT_LEVELS.map(([, hint], i) => ({
+                    v: i + 1,
+                    label: String(i + 1),
+                    title: `Change ${hint} — Evolve uses this too`,
+                  }))}
+                />
               </Field>
+              <button
+                className="ce-key"
+                onClick={mutate}
+                disabled={prog.length < 2}
+                title={`Change ${MUT_LEVELS[mutLevel - 1][1]}, keeping bar 1 and your edits. The original stays in the history; while playing, the change waits for the loop to come round.`}
+              >
+                {SYM.mutate}Mutate
+              </button>
             </div>
-            <div className="ce-row">
+            {/* Every hangs under Evolve, the two groups one width, joined by a
+                wire from the Evolve key that lights when it's on */}
+            <div className={"ce-evo" + (evolve ? " on" : "")}>
               <Field label="Repeat">
                 <Keys
                   label="Repeat"
@@ -1499,6 +1516,16 @@ export default function ChordExplorer() {
                   Δ <b>{totalMotion}</b>
                 </span>
               )}
+              <span title={repeatStatusTitle}>
+                {repeat === "off" ? "once" : repeat}
+                {evolve && evolveEvery > 1 && (playing
+                  ? <> round <b>{Math.min(round, evolveEvery - 1) + 1}</b>/{evolveEvery}</>
+                  : <> every <b>{evolveEvery}</b></>)}
+              </span>
+              <span title={`Mutate changes ${MUT_LEVELS[mutLevel - 1][1]}${queued?.kind === "mutate" && !queued.auto ? " — one is waiting for the loop to come round" : ""}`}>
+                mutate <b>{MUT_LEVELS[mutLevel - 1][0]}</b>
+                {queued?.kind === "mutate" && !queued.auto && " next"}
+              </span>
               {playing && playingIdx >= 0 && (
                 <span>bar <b>{playingIdx + 1}</b>/{prog.length}</span>
               )}
@@ -1724,28 +1751,6 @@ function RootKeys({ root, onPick }) {
           </button>
         );
       })}
-    </div>
-  );
-}
-
-// Mutate's amount: four lines, lit up to the one you press
-function Steps({ value, onChange }) {
-  return (
-    <div className="ce-steps-wrap">
-      <div className="ce-steps" role="radiogroup" aria-label="How much a mutation changes">
-        {MUT_LEVELS.map(([label, hint], i) => (
-          <button
-            key={label}
-            role="radio"
-            aria-checked={value === i + 1}
-            aria-label={label}
-            title={`Change ${hint} — Evolve uses this too`}
-            className={i < value ? "lit" : undefined}
-            onClick={() => onChange(i + 1)}
-          />
-        ))}
-      </div>
-      <span className="ce-steps-val">{MUT_LEVELS[value - 1][0]}</span>
     </div>
   );
 }
@@ -2383,6 +2388,10 @@ body{margin:0; background:#F3F3F0;}
 .ce-root{
   --page:#F3F3F0; --face:#FCFCFA; --seam:#E3E3DE; --hi:#FFFFFF;
   --ink:#1C1C1A; --print:#8A8A84; --print2:#B4B4AE; --unlit:#D9D9D3; --key:#FAFAF8;
+  /* one key height for the whole face: a key in a group and a key on its own
+     stand the same height, measured by their outlines (a group's 1.5px seam
+     padding, a lone key's 1.5px ring) — the lone key's lip hangs below that */
+  --key-h:48px;
   --lamp:#FF5F1F; --lamp-glow:color-mix(in srgb, var(--lamp) 50%, transparent);
   --paper:#F7F6F3; --paper-ink:#1E1E1C; --paper-dim:#9A9990; --paper-rule:rgba(30,30,28,.12);
   /* function hues: no longer painted on the face (function is printed in the
@@ -2464,7 +2473,7 @@ body{margin:0; background:#F3F3F0;}
 }
 .ce-bg.col{display:flex; flex-direction:column;}
 .ce-bg > button, .ce-keys > button{
-  min-width:52px; height:48px; padding:0 16px;
+  min-width:52px; height:var(--key-h); padding:0 16px;
   background:var(--key); display:grid; place-items:center;
   font:600 20px var(--cond); letter-spacing:.08em; text-transform:uppercase;
   color:var(--unlit); transition:color .12s, text-shadow .12s, background .12s;
@@ -2505,17 +2514,39 @@ body{margin:0; background:#F3F3F0;}
 .ce-root .ce-keys > button.acc.on{background:#FFF9F4;}
 .ce-keys > button:nth-child(1){border-top-left-radius:0;}
 
-/* Mutate's amount: four lines, press one to light up to it */
-.ce-steps-wrap{display:flex; align-items:center; gap:16px;}
-.ce-steps{display:flex; gap:8px; height:48px; align-items:stretch; padding:0 4px;}
-.ce-root .ce-steps button{width:8px; border-radius:1.5px; background:var(--unlit); transition:background .12s, box-shadow .12s;}
-.ce-root .ce-steps button:hover{background:#C6C6BF;}
-.ce-root .ce-steps button.lit{background:var(--lamp); box-shadow:0 0 5px var(--lamp-glow);}
-.ce-steps-val{font:500 20px var(--din); min-width:2.2em;}
+/* Generate's two lines: an amount on the left, the key that acts on the right */
+.ce-go{display:grid; grid-template-columns:max-content max-content; gap:20px 16px; align-items:end;}
+/* lifted by its ring so its outline, not its box, meets the group's bottom */
+.ce-go > .ce-key{justify-self:stretch; margin-bottom:1.5px;}
+/* a four-column face leaves the module too narrow for both at full size:
+   narrower amount keys, and the go keys drop their drawings */
+.ce-m-gen{container-type:inline-size;}
+@container (max-width:360px){
+  .ce-go{column-gap:12px;}
+  .ce-root .ce-go .ce-bg > button{min-width:40px; padding:0;}
+  .ce-root .ce-go > .ce-key{padding:0 14px;}
+  .ce-go > .ce-key svg{display:none;}
+}
+
+/* Repeat, with Every hanging under it: the groups share a width (Every's keys
+   stretch to Repeat's), so the wire from the middle of Evolve, the last key,
+   always lands on Every. Its length is the gap between the groups: the group's
+   1.5px padding, the row gap, the label's fixed line and its margin. */
+.ce-evo{display:inline-grid; row-gap:20px;}
+.ce-evo .ce-lbl{line-height:20px; transition:color .12s;}
+.ce-evo .ce-bg{display:flex;}
+.ce-evo .ce-bg > button{flex:1 1 auto;}
+.ce-evo .ce-f:first-child .ce-bg > button:last-child{position:relative;}
+.ce-evo .ce-f:first-child .ce-bg > button:last-child::after{
+  content:""; position:absolute; left:50%; top:100%; width:2px; margin-left:-1px;
+  height:51.5px; background:var(--unlit); transition:background .12s, box-shadow .12s;
+}
+.ce-evo.on .ce-f:first-child .ce-bg > button:last-child::after{background:var(--lamp); box-shadow:0 0 5px var(--lamp-glow);}
+.ce-evo.on .ce-f + .ce-f .ce-lbl{color:var(--lamp);}
 
 /* --- momentary keys: do something, hold no state ------------------------- */
 .ce-root .ce-key{
-  height:56px; min-width:56px; padding:0 20px; border-radius:8px; background:var(--key);
+  height:var(--key-h); min-width:var(--key-h); padding:0 20px; border-radius:8px; background:var(--key);
   box-shadow:0 0 0 1.5px var(--seam), 0 2.5px 0 var(--seam), inset 0 1px 0 #fff;
   font:600 20px var(--cond); letter-spacing:.1em; text-transform:uppercase; color:var(--ink);
   display:inline-grid; place-items:center; grid-auto-flow:column; gap:12px;

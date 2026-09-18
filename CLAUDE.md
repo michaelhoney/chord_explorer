@@ -146,8 +146,13 @@ The engine, reading top to bottom:
   static mockup it was built from, and the reference for anything visual. One white chassis
   (`.ce-chassis`), modules set into it with 2px seams (the chassis colour showing through the
   grid gap), each with a printed number and name (`ModHead`): **01 Key** (root, mode, 7ths,
-  Sus), **02 Generate** (Suggest + bars, Mutate + amount, then **Repeat** — Off / Loop /
-  Evolve as one row of keys — and Evolve's **Every** 1/2/4/8), **03 Playback** (voicing,
+  Sus), **02 Generate** (two lines, amount on the left and the key that acts on the right — bars
+  2/4/8 then **Suggest**, amount 1/2/3 then **Mutate** — sharing grid columns (`.ce-go`) so
+  the two keys match; a container query shrinks them when the four-column face narrows the
+  module; then **Repeat** — Off / Loop /
+  Evolve as one row of keys — and Evolve's **Every** 1/2/4/8, hung under it in `.ce-evo`: the two groups share a width, and
+  a wire drops from the Evolve key onto Every, lit in the lamp colour while Evolve is on — its
+  length is fixed CSS arithmetic, so it depends on `.ce-evo`'s row gap and label line-height), **03 Playback** (voicing,
   bass, hold bass, arpeggio, -4-, tempo), **04 Out** (route and MIDI port), then the
   display with the **transport** beside it, **05** the futures and **06 Sound**. Generate sits
   with Key rather than the transport because it sets up material rather than editing what's
@@ -156,8 +161,8 @@ The engine, reading top to bottom:
   whole face is built from a few parts, defined together after the component:
   **`Keys`** (a row of keys with cut-out legends, the chosen one lit — every former dropdown
   became one, so the choices are always in view), **`Toggle`** (a key that stays lit, set in
-  a `.ce-bg` alone or with others), **`RootKeys`** (the key laid out as an octave),
-  **`Steps`** (Mutate's amount as four lines) and **`Level`** (below). Legends are words where
+  a `.ce-bg` alone or with others) — every key on the face stands **`--key-h`** tall by its outline, grouped or alone (the transport's `.big` keys excepted), **`RootKeys`** (the key laid out as an octave),
+  and **`Level`** (below). Legends are words where
   a word is short and small line drawings (`SYM`, `WAVE_SYM`) where it isn't — cryptic on
   purpose, with a tooltip on every key. **One lamp colour** lights everything that's on: a
   random pick from `LAMPS` on each visit, changeable from the dots above the chassis, set as
@@ -303,8 +308,11 @@ The engine, reading top to bottom:
   (`evolveEvery`, `ee=` when not 1, read through a ref so a change reaches a run in flight).
   Anything you queued yourself still lands at the very next cycle end. Stop drops an `auto`
   one, since it was only ever for next time round.
-  The **mutation level** (the select beside Mutate, `ml=` when not 1) is 1–4 quarters of
-  the bars, read live, so Evolve and a waiting mutation both follow it.
+  The display's top line reads both out: `once` / `loop` / `evolve` (with `every N`, or
+  `round r/N` while playing — `round` is state the tick sets on the Draw clock, mirroring the
+  `rounds` ref), and `mutate` with the amount, plus `next` while a Mutate you pressed waits.
+  The **mutation level** (the keys beside Mutate, `ml=` when not 1) is 1–3 quarters of
+  the bars — the engine's level 4 isn't offered in the UI, and `ml=4` in an old link reads as 3 — read live, so Evolve and a waiting mutation both follow it.
   **`mutateLoop`** (in `harmony.js`) re-picks `level` quarters of the bars (at least one).
   Levels 1–3 never touch bar 1; level 4 is deliberately the extreme setting and re-picks
   **every** bar, bar 1 included, so the loop needn't start at home any more. It picks with the
