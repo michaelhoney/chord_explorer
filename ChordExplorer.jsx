@@ -929,10 +929,39 @@ export default function ChordExplorer() {
   // switched output. Switching output mid-run should just move the sound across.
   const stopRef = useRef(stopPlayback);
   const playVoicedRef = useRef(playVoiced);
+  const playAllRef = useRef(playAll);
   useEffect(() => {
     stopRef.current = stopPlayback;
     playVoicedRef.current = playVoiced;
+    playAllRef.current = playAll;
   });
+
+  // Space plays and stops, from anywhere on the page but a text field. It
+  // starts audio fine from cold: a key press is a gesture that keeps its user
+  // activation (see useSynth). The catch is focus — clicking any key on the face
+  // leaves it focused, and Space presses the focused button on keyup, so Space
+  // would also toggle Loop or clear the progression. Both halves of the press
+  // are swallowed, so Space only ever means the transport; Enter still presses
+  // a focused key. Registered once, reading everything through refs.
+  useEffect(() => {
+    const typing = (el) =>
+      !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    const isSpace = (e) => e.code === "Space" || e.key === " ";
+    const down = (e) => {
+      if (!isSpace(e) || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+      e.preventDefault(); // no scroll, no button press
+      if (!e.repeat) playAllRef.current(); // Play when stopped, Stop when playing
+    };
+    const up = (e) => {
+      if (isSpace(e) && !typing(e.target)) e.preventDefault();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
 
   // a new key empties the progression and the history with it — the one change
   // that stops a run rather than being heard on the next slot
@@ -1536,11 +1565,11 @@ export default function ChordExplorer() {
               onClick={() => { if (!playing) playAll(); }}
               disabled={!prog.length}
               aria-label="Play"
-              title={playing ? "Playing" : "Play the progression"}
+              title={playing ? "Playing — Space stops" : "Play the progression (Space)"}
             >
               {SYM.play}
             </button>
-            <button className="ce-key big" onClick={stopPlayback} disabled={!playing} aria-label="Stop" title="Stop">
+            <button className="ce-key big" onClick={stopPlayback} disabled={!playing} aria-label="Stop" title="Stop (Space)">
               {SYM.stop}
             </button>
             <span className="ce-lbl">Delete</span>

@@ -280,6 +280,10 @@ The engine, reading top to bottom:
   Scheduled callbacks call **`playVoicedRef.current`** and **`stopRef.current`**, never the
   closures — a MIDI port or Arpeggio change must reach a run in flight, and listing
   `stopPlayback` as an effect dependency would stop playback on every port change.
+  **Space** plays and stops (`playAllRef`, from a `window` listener registered once), from
+  anywhere but a text field. It swallows **both** halves of the press: clicking any key on the
+  face leaves it focused, and a focused button activates on Space's keyup, so without that
+  Space would also toggle Loop or clear the progression. Enter still presses a focused key.
 - **Generations, the queue, Mutate and Evolve.** State is `hist = { gens, cur }`; `prog` is
   `gens[cur]` and `setProg` edits it in place, so hand edits never add history. Suggest,
   Mutate, Evolve and Clear add a generation (`pushGen`; an empty current one is written over,
