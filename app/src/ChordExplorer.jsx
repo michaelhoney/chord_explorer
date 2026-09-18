@@ -2088,18 +2088,27 @@ function PianoRoll({
 
   // connectors: pair voices by ascending pitch order across adjacent chords,
   // from the right edge of one pill to the left edge of the next — along, down
-  // (or up) at the midpoint, along again
+  // (or up) at the elbow, along again. Each voice turns at its own point in the
+  // gap, lower voices sooner and higher ones later (0.4 / 0.5 / 0.6 of the way
+  // for a triad): at a shared midpoint, every vertical run in a big move lies
+  // on the same line and you can't tell which voice went where.
+  const ELBOW_STEP = 0.1;
   const links = [];
-  const link = (i, y1, y2) => {
+  const link = (i, y1, y2, at = 0.5) => {
     const x1 = i * (COL + GAP) + COL;
     const x2 = (i + 1) * (COL + GAP);
-    const mid = (x1 + x2) / 2;
-    links.push(y1 === y2 ? `M${x1} ${y1}H${x2}` : `M${x1} ${y1}H${mid}V${y2}H${x2}`);
+    const elbow = x1 + (x2 - x1) * at;
+    links.push(y1 === y2 ? `M${x1} ${y1}H${x2}` : `M${x1} ${y1}H${elbow}V${y2}H${x2}`);
   };
   for (let i = 0; i < voicings.length - 1; i++) {
     const a = [...voicings[i]].sort((p, q) => p - q);
     const b = [...voicings[i + 1]].sort((p, q) => p - q);
-    for (let v = 0; v < Math.min(a.length, b.length); v++) link(i, cy(a[v]), cy(b[v]));
+    const n = Math.min(a.length, b.length);
+    for (let v = 0; v < n; v++) {
+      const at = Math.min(0.8, Math.max(0.2, 0.5 + (v - (n - 1) / 2) * ELBOW_STEP));
+      link(i, cy(a[v]), cy(b[v]), at);
+    }
+    // the bass has its own lane, so nothing to share its elbow with
     if (hasBass) link(i, bassTop(bass[i]) + CELL / 2, bassTop(bass[i + 1]) + CELL / 2);
   }
 

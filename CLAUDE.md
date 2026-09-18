@@ -324,8 +324,10 @@ The engine, reading top to bottom:
   cursor bar under its tile. Stop cancels the Draw queue so no stray light lands afterwards. A
   behind-the-columns SVG draws ink **connectors** pairing voices by ascending pitch across
   adjacent chords, right-angled the way a panel draws — along from the right edge of one pill,
-  up or down at the midpoint of the gap, along into the next (a held voice is one straight
-  line). Fixed `ROLL` geometry (`ROW/CELL/COL/GAP`) keeps the
+  up or down at an elbow, along into the next (a held voice is one straight line). Each
+  voice turns at its own point in the gap, lower voices sooner and higher ones later (0.4 /
+  0.5 / 0.6 of the way for a triad, `ELBOW_STEP` apart): with one shared midpoint, a big move
+  stacked every vertical run on the same line and you couldn't tell which voice went where. Fixed `ROLL` geometry (`ROW/CELL/COL/GAP`) keeps the
   SVG and the flex columns on the same coordinates. The bass voice gets its **own lane** under
   the chords (`ROLL.LANE` gap, dashed rule) rather than its true height, which would open a
   tall band of empty rows between the two; pitch is to scale within each lane. Each note pill is its own button (plays
