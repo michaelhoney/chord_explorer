@@ -21,7 +21,7 @@ repo root mirrors all five as the canonical copies; `cp` them over at a checkpoi
 ```bash
 cd app
 npm install
-npm run dev        # http://localhost:5173/chord_explorer/ (redirects there from /)
+npm run dev        # http://localhost:5173/
 npm test           # vitest run — the engine suite
 npm run lint       # oxlint
 ```
@@ -29,10 +29,10 @@ npm run lint       # oxlint
 There is no root `package.json`; every script above runs from `app/`.
 
 **Deployment.** `.github/workflows/deploy.yml` builds `app/` and publishes `app/dist` to
-GitHub Pages on every push to `main`, gated on lint and the engine suite. Pages serves the
-repo at `/chord_explorer/`, so `vite.config.js` sets `base` to match — which is also why the
-dev server lives under that path rather than at `/`. Change the repo name and that `base`
-has to change with it, or every asset 404s.
+Cloudflare Pages (project `chords`, served at chords.michaelhoney.com) on every push to
+`main`, gated on lint and the engine suite. It needs the repo secrets
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The site is at the root of its domain,
+so `vite.config.js` has `base: '/'`; serving it under a path would need `base` to match.
 
 Audio starts on your first press — any click or key (browsers block autoplay until a gesture — expected). Fonts
 load from Google Fonts via `@import`; offline it falls back to system fonts and still works.

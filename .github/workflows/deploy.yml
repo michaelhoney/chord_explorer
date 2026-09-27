@@ -1,4 +1,4 @@
-name: Deploy to Pages
+name: Deploy to Cloudflare Pages
 
 on:
   push:
@@ -7,16 +7,14 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # let a running deploy finish rather than cancelling it mid-publish
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: false
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -32,17 +30,20 @@ jobs:
       - run: npm run lint
       - run: npm test # the engine suite gates the deploy
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          # not affected by defaults.working-directory — that only applies to `run`
-          path: app/dist
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+      # Creates the Pages project on the first deploy; after that it already
+      # exists and this fails harmlessly
+      - name: Create the Pages project if it's missing
+        run: npx --yes wrangler@4 pages project create chords --production-branch=main
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4" # the action defaults to an old 3.x
+          # not affected by defaults.working-directory — that only applies to `run`
+          command: pages deploy app/dist --project-name=chords --branch=main
