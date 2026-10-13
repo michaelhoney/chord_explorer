@@ -103,6 +103,16 @@ Mini, press **On**, and its keys and pads play the synth (on any channel), with 
 pedal and pitch bend working too. Like MIDI out, it needs Chrome or Firefox. Keys light up
 whenever their note sounds — including the explorer's chords.
 
+**Knobs** puts your controller's eight knobs on the synth's levels. An MPK Mini's knobs work
+straight away — the top row on Cutoff, Resonance and the filter envelope's Amount and Decay,
+the bottom row on the LFO's rate and depth, Attack and Release — and every level a knob turns
+wears its name (K1–K8). To change them, press **Map**, turn a knob and click the level it
+should turn (either order); a controller that sends different knobs gets learned the same
+way, and turning its knobs left to right in Map fills K1 to K8. **Default** puts them back.
+A knob never makes a level jump: after a preset change, say, it waits until you turn it to
+where the level is — a lit marker on the level shows where the knob is meanwhile — and then
+takes it. The mapping is kept in this browser, not in the share link.
+
 Everything retunes live — turn a knob while a loop is playing and you hear it in the next
 chord. Letting go of a level replays the last thing the synth played, so you can design a
 sound with the loop stopped. The patch rides along in the share link. It works everywhere,
@@ -193,8 +203,8 @@ already name.
    changing while it plays.
 10. ✅ **The synth as an instrument** — done; its own device, with a lowpass/highpass
     filter, a filter envelope, a scope, a keyboard and MIDI in.
-11. **Knobs from a controller** — MIDI learn, so an MPK Mini's eight knobs can turn the
-    cutoff, resonance and the rest.
+11. ✅ **Knobs from a controller** — done; an MPK Mini's eight knobs on the synth's levels,
+    remappable with **Map**.
 12. **More filter** — key tracking, velocity to filter, a 12dB slope, bandpass and notch.
 
 ---
@@ -213,7 +223,8 @@ Everything is under `app/src/`. CLAUDE.md has the full map and the reasons.
   is struck: velocity shaping, arpeggios, the note events) have no imports at all, so they
   test in plain Node; `state.js` is its slice of the URL; `ChordExplorer.jsx` is the device.
 - `synth/` — the instrument. `params.js` (the knobs, presets and how a patch packs into a
-  URL) and `dsp.js` (the display's maths) are import-free too; `engine.js` is the signal
+  URL), `dsp.js` (the display's maths) and `knobs.js` (a controller's knobs on the levels)
+  are import-free too; `engine.js` is the signal
   chain — the only file that builds audio nodes; `Synth.jsx` is the device, with `Scope.jsx`
   and `Keyboard.jsx`.
 - `midi/` — one shared MIDI access, out, in, and a pure message parser.

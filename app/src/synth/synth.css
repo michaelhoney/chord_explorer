@@ -7,10 +7,11 @@
     "plate plate plate plate"
     "disp  disp  disp  pre"
     "snd   snd   snd   snd"
-    "keys  keys  keys  in";
+    "keys  keys  keys  in"
+    "knobs knobs knobs in";
 }
 .ce-s-disp{grid-area:disp;} .ce-s-pre{grid-area:pre;} .ce-s-snd{grid-area:snd;}
-.ce-s-keys{grid-area:keys;} .ce-s-in{grid-area:in;}
+.ce-s-keys{grid-area:keys;} .ce-s-in{grid-area:in;} .ce-s-knobs{grid-area:knobs;}
 
 /* --- the display: dark glass, the trace lit in the lamp colour ----------- */
 .ce-scope{
@@ -104,10 +105,48 @@
 .ce-s-in .ce-bg.col{max-width:100%;}
 .ce-midi-last{color:var(--ink); min-height:1.35em;}
 
+/* --- knobs: the controller's eight, as they sit on it --------------------- */
+.ce-knobs-top{display:flex; flex-wrap:wrap; align-items:center; gap:16px 20px; margin-bottom:22px;}
+.ce-knobs-top .ce-key{margin-bottom:1.5px;}
+.ce-knobs-hint{flex:1 1 280px; max-width:62ch; font-size:16px;}
+.ce-knobs{
+  display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:1.5px;
+  background:var(--seam); padding:1.5px; border-radius:8px; overflow:hidden;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.06);
+}
+.ce-knob{position:relative; min-width:0;}
+.ce-root .ce-knob-face{
+  display:grid; gap:4px; width:100%; height:100%; text-align:left;
+  padding:12px 16px 14px; background:var(--key); transition:background .12s, box-shadow .12s;
+}
+.ce-root .ce-knob-face:hover{background:#FFFFFF;}
+.ce-knob-top{display:flex; justify-content:space-between; align-items:baseline; gap:8px; font:500 14px var(--cond); letter-spacing:.06em; color:var(--print);}
+.ce-knob-top b{font:600 18px var(--cond); letter-spacing:.08em; color:var(--print2); transition:color .12s, text-shadow .12s;}
+.ce-knob-group{font:500 13px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print); margin-top:6px;}
+.ce-knob-name{font:600 22px var(--din); color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-knob-val{font:500 17px var(--din); color:var(--print);}
+.ce-knob-meter{position:relative; display:flex; justify-content:space-between; height:12px; margin-top:6px;}
+.ce-knob-meter i{width:3px; height:100%; background:var(--unlit); border-radius:.75px;}
+.ce-knob-meter i.lit{background:var(--ink);}
+.ce-knob-meter b{position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; background:var(--lamp); box-shadow:0 0 6px var(--lamp-glow);}
+/* the knob turning right now: its legend lights, like an activity lamp */
+.ce-knob.touched .ce-knob-top b{color:var(--lamp); text-shadow:0 0 8px var(--lamp-glow); transition:none;}
+/* the slot Map is filling */
+.ce-root .ce-knob.armed .ce-knob-face{background:#FFFDFB; box-shadow:inset 0 0 0 2px var(--lamp);}
+.ce-knob.armed .ce-knob-top b{color:var(--lamp);}
+/* room for its × beside the CC */
+.ce-knob.armed .ce-knob-top{padding-right:30px;}
+.ce-root .ce-knob-x{
+  position:absolute; top:8px; right:8px; width:24px; height:24px; border-radius:50%;
+  display:grid; place-items:center; font-size:18px; line-height:1;
+  border:1.5px solid var(--print2); color:var(--print); background:var(--face);
+}
+.ce-root .ce-knob-x:hover{border-color:var(--ink); color:var(--ink);}
+
 /* --- narrower: two columns, then one ------------------------------------- */
 @media (max-width:1400px){
   .ce-synth{grid-template-columns:1fr 1fr; grid-template-areas:
-    "plate plate" "disp disp" "pre in" "snd snd" "keys keys";}
+    "plate plate" "disp disp" "pre in" "snd snd" "keys keys" "knobs knobs";}
   .ce-snd-cols{grid-template-columns:repeat(3, minmax(0,1fr)); row-gap:36px;}
   .ce-snd-col{padding:0 22px;}
   .ce-snd-col:nth-child(3n+1){padding-left:0; box-shadow:none;}
@@ -115,11 +154,12 @@
 }
 @media (max-width:900px){
   .ce-synth{grid-template-columns:1fr; grid-template-areas:
-    "plate" "disp" "pre" "snd" "keys" "in";}
+    "plate" "disp" "pre" "snd" "keys" "knobs" "in";}
   .ce-scope{grid-template-columns:minmax(0,1fr); padding:14px 14px 10px;}
   .ce-scope-plot{height:180px;}
   .ce-snd-cols{grid-template-columns:minmax(0,1fr);}
   .ce-root .ce-snd-col{padding:0; box-shadow:none;}
   .ce-snd-col + .ce-snd-col{margin-top:30px;}
   .ce-kb{flex-basis:100%; height:112px;}
+  .ce-knobs{grid-template-columns:repeat(2, minmax(0,1fr));}
 }

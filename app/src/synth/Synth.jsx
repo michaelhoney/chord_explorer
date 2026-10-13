@@ -12,6 +12,8 @@ import {
 } from "./params.js";
 import Scope from "./Scope.jsx";
 import Keyboard from "./Keyboard.jsx";
+import Knobs from "./Knobs.jsx";
+import { useKnobs, mappable } from "./useKnobs.js";
 import { ModHead, Field, Keys, Level, Led, NoSound } from "../panel/parts.jsx";
 import { WAVE_SYM, FILTER_SYM } from "../panel/symbols.jsx";
 import { MIDI_STATUS } from "../midi/access.js";
@@ -54,6 +56,9 @@ export default function Synth({ engine, sound, setSound, midiAccess, lamp, noSou
       clearTimeout(r.off);
     };
   }, []);
+  // the controller's knobs on the levels (see useKnobs)
+  const knobs = useKnobs(sound, setSound);
+  const onCC = knobs.onCC;
   const onMidi = useCallback(
     (m) => {
       if (m.type === "noteon") engine.noteOn(m.note, m.velocity);
@@ -61,6 +66,7 @@ export default function Synth({ engine, sound, setSound, midiAccess, lamp, noSou
       else if (m.type === "pedal") engine.setPedal(m.down);
       else if (m.type === "bend") engine.bend(m.amount * BEND_SEMITONES);
       else if (m.type === "alloff") engine.allNotesOff();
+      else if (m.type === "cc") onCC(m.cc, m.value);
       const r = readout.current;
       r.text = describeMidi(m);
       setActivity(true);
@@ -73,7 +79,7 @@ export default function Synth({ engine, sound, setSound, midiAccess, lamp, noSou
         }, 100);
       }
     },
-    [engine]
+    [engine, onCC]
   );
   const midiIn = useMidiIn(midiAccess, onMidi);
   const listening = midiIn.source !== "off";
@@ -103,7 +109,7 @@ export default function Synth({ engine, sound, setSound, midiAccess, lamp, noSou
 
       <section className="ce-mod ce-s-snd" aria-labelledby="ce-h-snd">
         <ModHead n="02" id="ce-h-snd">Sound</ModHead>
-        <SoundColumns sound={sound} setSound={setSound} onAudition={engine.audition} />
+        <SoundColumns sound={sound} setSound={setSound} onAudition={engine.audition} knobs={knobs} />
       </section>
 
       <section className="ce-mod ce-s-keys" aria-labelledby="ce-h-keys">
@@ -157,6 +163,11 @@ export default function Synth({ engine, sound, setSound, midiAccess, lamp, noSou
           </Field>
         </div>
       </section>
+
+      <section className="ce-mod ce-s-knobs" aria-labelledby="ce-h-knobs">
+        <ModHead n="05" id="ce-h-knobs">Knobs</ModHead>
+        <Knobs k={knobs} sound={sound} listening={listening} />
+      </section>
     </div>
   );
 }
@@ -175,8 +186,10 @@ function NoteLed({ engine }) {
 // One control per parameter, so adding a knob is a line in the table rather
 // than a line of markup. Every level runs 0–1000 underneath whatever it
 // controls (see paramToPos) — meaningless to read aloud, hence
-// aria-valuetext carrying the formatted value instead.
-function Knob({ k, value, onChange, onCommit }) {
+// aria-valuetext carrying the formatted value instead. `knob` is what the
+// level shows of the controller knob on it (see useKnobs' levelFor), and
+// `pick`, in Map, makes a click choose the level rather than move it.
+function Control({ k, value, onChange, onCommit, knob, pick }) {
   const p = SYNTH_PARAMS[k];
   if (p.kind === "enum") {
     return (
@@ -202,6 +215,8 @@ function Knob({ k, value, onChange, onCommit }) {
       onPos={(t) => onChange(paramFromPos(k, Math.round(t * 1000)))}
       // audition on release, not on every frame of the drag
       onCommit={onCommit}
+      {...knob}
+      pick={pick}
     />
   );
 }
@@ -268,7 +283,7 @@ function Presets({ sound, setSound, onAudition }) {
 }
 
 // a column per group in SYNTH_PARAMS, so a new knob only has to name its group
-function SoundColumns({ sound, setSound, onAudition }) {
+function SoundColumns({ sound, setSound, onAudition, knobs }) {
   const set = (k) => (v) => setSound((s) => ({ ...s, [k]: v }));
   return (
     <div className="ce-snd-cols">
@@ -282,7 +297,15 @@ function SoundColumns({ sound, setSound, onAudition }) {
           </div>
           <div className="ce-stack">
             {g.keys.map((k) => (
-              <Knob key={k} k={k} value={sound[k]} onChange={set(k)} onCommit={onAudition} />
+              <Control
+                key={k}
+                k={k}
+                value={sound[k]}
+                onChange={set(k)}
+                onCommit={onAudition}
+                knob={knobs.levelFor(k)}
+                pick={knobs.mapping && mappable(k) ? () => knobs.pickLevel(k) : undefined}
+              />
             ))}
           </div>
         </div>

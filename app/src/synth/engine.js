@@ -34,6 +34,15 @@ const VOLUME = -11; // headroom: drive and resonance both add level
 export const SCOPE_SIZE = 4096; // samples per scope read: ~85ms, three periods of a low E
 const LFO_TAP = 32;
 
+// A continuous value moves by gliding to its new setting over a few ms,
+// starting now on the audio clock. Two reasons. A knob has only 128 steps,
+// which across Cutoff's seven octaves is a step of a fifteenth of an octave —
+// set outright, a slow turn on a resonant filter is audibly a staircase (the
+// "zipper"). And a plain `.value =` lands at Tone.now(), which is the
+// scheduling look-ahead, 100ms late — sluggish under a hand on a knob.
+const GLIDE = 0.02;
+const glide = (param, value) => param.rampTo(value, GLIDE, Tone.immediate());
+
 // A voice. Tone's Synth is oscillator → amp envelope; this puts a filter
 // between the two, with its own envelope on the cutoff — so every note opens
 // and closes the filter for itself, the way a polysynth's voice cards do.
@@ -84,7 +93,17 @@ function voiceClass(bus) {
       this.dryEnvelope.triggerRelease(time);
     }
     set(props) {
-      super.set(props);
+      // the filter's continuous values glide rather than step (see glide);
+      // everything else — the type, the envelopes' times — sets outright
+      const { filter, contour, ...rest } = props;
+      super.set(rest);
+      if (filter) {
+        const { frequency, Q, ...other } = filter;
+        this.filter.set(other);
+        if (frequency != null) glide(this.filter.frequency, frequency);
+        if (Q != null) glide(this.filter.Q, Q);
+      }
+      if (contour?.gain != null) glide(this.contour.gain, contour.gain);
       // the dry copy keeps the amp's shape, so the scope's two traces compare
       // like with like
       if (props.envelope && this.dryEnvelope) this.dryEnvelope.set(props.envelope);
@@ -121,12 +140,12 @@ function applySound(n, s) {
   const voice = voiceSettings(s);
   n.seq.set(voice);
   n.keys.set(voice);
-  n.lfo.frequency.value = s.lfoRate;
-  n.bus.lfo.gain.value = lfoCents(s.lfoDepth);
-  n.drive.wet.value = s.drive;
+  glide(n.lfo.frequency, s.lfoRate);
+  glide(n.bus.lfo.gain, lfoCents(s.lfoDepth));
+  glide(n.drive.wet, s.drive);
   n.drive.distortion = 0.2 + s.drive * 0.6;
-  n.chorus.wet.value = s.chorus;
-  n.reverb.wet.value = s.reverb;
+  glide(n.chorus.wet, s.chorus);
+  glide(n.reverb.wet, s.reverb);
   // decay is the one setter that re-renders an impulse response, which is
   // both async and audible — so only when it has actually moved
   if (Math.abs(n.size - s.size) > 1e-3) {

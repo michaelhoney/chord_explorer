@@ -65,15 +65,17 @@ app/src/
   synth/                 the instrument
     params.js              the patch model: knobs, presets, wire format    pure, no imports
     dsp.js                 the display's maths: response curve, trigger     pure, no imports
+    knobs.js               a controller's knobs on the levels; pickup       pure, no imports
     engine.js              the signal chain — the only file that builds audio nodes
-    Synth.jsx              the device; with Scope and Keyboard
+    useKnobs.js            the knobs, live: applying turns, Map
+    Synth.jsx              the device; with Scope, Keyboard and Knobs
   midi/                  access.js (one access for the page), out.js, in.js, messages.js (pure)
   panel/                 parts.jsx, symbols.jsx, panel.css — the hardware both faces are built from
 ```
 
 Keep the seams clean; they're the main lever for testability and for everything on the
 roadmap. The **model modules** — `harmony.js`, `perform.js`, `params.js`, `dsp.js`,
-`messages.js` — have **no imports at all**, not React, not Tone, not each other (`state.js`
+`knobs.js`, `messages.js` — have **no imports at all**, not React, not Tone, not each other (`state.js`
 builds on harmony and perform, and nothing else), so every suite runs in plain Node with no
 audio context. The **explorer never builds an audio node**: it hands `chordEvents`' note
 events to `engine.play` or a MIDI port, and Tone is only its clock. The **synth knows nothing
@@ -214,7 +216,10 @@ The harmony engine, `chords/harmony.js`, reading top to bottom:
   ten), Home and End. `pos` is 0–1 and the caller maps it; `onStep` optionally owns the
   arrows (tempo's 120 bars, 30–150, are one BPM each, and an arrow is one BPM). The drag is driven from
   `window` listeners that also let go when `buttons` is 0 — the same lesson as the roll's
-  reordering. `onCommit` fires on release, which is when the synth auditions.
+  reordering. `onCommit` fires on release, which is when the synth auditions. For the
+  controller's knobs it also takes a `tag` (K3, lit while `touched`), a `ghost` (where that
+  knob is while it hasn't picked the level up) and `pick` — in Map, a click or Enter chooses
+  the level instead of moving it — with `target` marking the level the lit slot is on.
 - **MIDI** — one **`useMidiAccess()`** for the page (`midi/access.js`), shared by the
   explorer's Out and the synth's In: `status` is a small state machine
   (`unsupported | insecure | idle | asking | ready | denied`) whose copy lives in
@@ -282,7 +287,13 @@ The harmony engine, `chords/harmony.js`, reading top to bottom:
   `PolySynth.set`, which every new voice is also built from). That's the whole point of a
   knob, and it's why a preset change mid-playback just re-voices the run. `reverb.decay` is
   the one setter that re-renders an impulse response — async and audible — so it's applied
-  only when the value has actually changed.
+  only when the value has actually changed. Continuous values **glide** (`glide()`, 20ms,
+  starting at `Tone.immediate()`) rather than being set: a knob has only 128 steps, about a
+  fifteenth of an octave each across Cutoff, which set outright is an audible staircase on a
+  resonant filter; and a plain `.value =` lands at `Tone.now()`, the 100ms look-ahead. The
+  `Voice` overrides `set` to glide its filter frequency, Q and contour; `applySound` glides
+  the LFO's rate and depth and the effects' wet levels. Cutoff glides exponentially (Tone
+  ramps anything in `frequency` units that way), so a glide is an even sweep in pitch.
   **Starting audio.** It starts on the first **`pointerdown` or `keydown` anywhere on the
   page**, from capture-phase listeners on `window` — **never from a `click` handler**. Safari
   27, under its default Auto-Play setting ("Stop Media with Sound"), grants user activation at
@@ -349,7 +360,8 @@ The harmony engine, `chords/harmony.js`, reading top to bottom:
 - **The synth device** (`synth/Synth.jsx`) — a second chassis: nameplate (lamps **Note**, lit
   while anything sounds, its own small subscription so the panel doesn't re-render per note;
   and **MIDI In**, lit briefly by each message), the **display** with **01 Presets** beside
-  it, **02 Sound**, **03 Keys** and **04 In**. Four columns; two below 1400px; one below 900.
+  it, **02 Sound**, **03 Keys**, **04 In** and **05 Knobs**. Four columns; two below 1400px;
+  one below 900.
   **Presets** are a 3×3 block of keys (`Keys cols={3}`), the ninth, **—**, lighting when the
   levels match none of them; the name is **derived** by comparing values rather than stored,
   so a shared link carrying only numbers still opens with the right preset lit, and nudging
@@ -369,6 +381,31 @@ The harmony engine, `chords/harmony.js`, reading top to bottom:
   the transport. A key is lit while its note sounds, whoever is playing it, so the explorer's
   chords show up there too. The MIDI readout and lamp are throttled: pitch bend alone can
   send a hundred messages a second, and each would re-render every level on the panel.
+- **Knobs** (`synth/knobs.js`, `useKnobs.js`, `Knobs.jsx`) — a controller's eight knobs on
+  the synth's levels, drawn as they sit on an MPK Mini: two rows of four slots, K1–K8, each
+  a knob (the CC it sends) and the level it turns. **`DEFAULT_KNOBS`** answers to an MPK
+  Mini mk3's factory CC 70–77, so they work before anything is mapped (Cutoff, Resonance,
+  filter env Amount and Decay; LFO rate and depth, Attack, Release). A turn moves the level
+  through `paramFromPos`, exactly as dragging it does, so a knob on Cutoff sweeps in octaves
+  and the sound, the URL and the panel all follow; only levels can be mapped, not keys
+  (`mappable`). **Pickup** (`takeover`): a knob that disagrees with its level — after a
+  preset, say — moves nothing until it comes within a step of the level or passes it, and
+  meanwhile a lamp-coloured `ghost` on the level and on its slot shows where the knob is.
+  Anything else moving the level makes the knob let go: it only stays holding while the
+  level is still the value it wrote (`wrote`). **Map** pairs knobs with levels in either
+  order: a turn names the knob (lights its slot and moves nothing), a click names the level;
+  a level picked first waits as `pending`. A knob the synth hasn't met takes the lit slot,
+  or else the first slot whose knob hasn't been heard from this visit — so on a controller
+  sending other CCs, turning its knobs left to right in Map fills K1 to K8. Clicking a slot
+  lights it (entering Map), the lit slot's × takes it off its level, **Default** restores
+  `DEFAULT_KNOBS`, Escape leaves Map. One knob per level and one slot per knob
+  (`assignParam`, `adoptCc`). Stored in the browser (`localStorage`, `parseKnobs` reading
+  it defensively), never the link: which knob turns what is about your rig, not the music.
+  Turns are batched by a ~16ms *timer* — a fast turn sends dozens of messages and only
+  where each knob ended up matters — not an animation frame, so the knobs keep working
+  while the page is in a background tab. The batch runs outside React, so it reads state
+  through a ref assigned in render and writes its own changes into that ref immediately,
+  or a fast turn would test pickup against a render that hasn't happened yet and stall.
 - **The scope** (`synth/Scope.jsx`) — dark glass, lit in the lamp colour, two panes comparing
   the same two signals: the voices with no filter (grey, the dry tap) and out of it (lit,
   tapped before drive and the effects, so the only difference between the traces is the
@@ -564,7 +601,7 @@ The harmony engine, `chords/harmony.js`, reading top to bottom:
   wire up both. Function used to be shown as colour everywhere; the hardware redesign moved it
   into words, so the face could keep one lamp colour and a mono display.
 - **The model modules are pure and import-free.** Everything in `harmony.js`, `perform.js`,
-  `params.js`, `dsp.js` and `messages.js` takes data and returns data — no React, no DOM, no
+  `params.js`, `dsp.js`, `knobs.js` and `messages.js` takes data and returns data — no React, no DOM, no
   Tone, and no imports at all. Don't add one; if something needs a library, it belongs in the
   presentation layer. Keep the pitch math in plain integers. `params.js` in particular
   describes the synth but never builds it: the moment it needs `Tone`, the split has gone
@@ -637,9 +674,9 @@ Roughly in order of fun (see README for detail):
     Attack, Decay, Sustain), a scope comparing the signal either side of the filter by wave
     and by spectrum with the live response curve, a 25-key keyboard, and MIDI in (notes on
     any channel, sustain pedal, pitch bend). Dynamics and Humanise moved to the explorer.
-11. **Knobs from a controller** — map CCs (an MPK Mini's eight knobs send 70–77 by default)
-    to levels, ideally by MIDI learn: touch a level, turn a knob. `parseMidi` already hands
-    CCs through; nothing uses them yet.
+11. ✅ **Knobs from a controller** — done; module 05, **Knobs**: eight slots on an MPK
+    Mini's CC 70–77 by default, remapped in **Map** by turning a knob and clicking a level,
+    with pickup so a knob never makes a level lurch, kept in the browser.
 12. **More filter** — key tracking (the cutoff following the note, as a Moog's keyboard
     control switches do), velocity to filter amount, a 12dB slope and bandpass/notch types
     (append to `filterType`'s options and `filterResponse` already knows the maths for its
@@ -669,7 +706,10 @@ struck: `velocityCurve` flat at zero dynamics, shaped at full, bounded under any
 pure function of its inputs; the arpeggio orders; and `chordEvents`' block, arp, -4- and
 hold-bass timings. [app/src/chords/state.test.js](app/src/chords/state.test.js) covers the
 explorer's link, feel included, and the hand-over from old links.
-[app/src/midi/messages.test.js](app/src/midi/messages.test.js) covers reading a controller.
+[app/src/midi/messages.test.js](app/src/midi/messages.test.js) covers reading a controller,
+and [app/src/synth/knobs.test.js](app/src/synth/knobs.test.js) mapping its knobs: the
+defaults, remapping without two slots sharing a knob or a level, pickup (reaching the level,
+passing it, holding it), and storage that drops a bad slot rather than the lot.
 
 [app/src/chords/harmony.test.js](app/src/chords/harmony.test.js) covers the harmony engine: key building across
 all three modes, `classify`, colour chords and suspensions, `optionsFrom` ranking and

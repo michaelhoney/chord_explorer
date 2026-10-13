@@ -82,7 +82,16 @@ export const Toggle = ({ on, children, ...rest }) => (
 // a hundredth of the travel. Dragging is driven from the window, the same
 // lesson as the roll's reordering: release anywhere and it still lets go.
 // `onCommit` fires on release — which is when the synth auditions.
-export function Level({ label, pos, text, onPos, onStep, onCommit, n = 36, wide, title }) {
+//
+// For a controller's knobs (see useKnobs): `tag` prints which knob turns it
+// (K3), lit while `touched`; `ghost` (0–1) marks where that knob is while it
+// hasn't yet picked the level up; and `pick` turns the level into a target —
+// in Map, a click (or Enter) says "this one" instead of moving it, and
+// `target` marks the one the lit knob is on.
+export function Level({
+  label, pos, text, onPos, onStep, onCommit, n = 36, wide, title,
+  tag, touched, ghost, pick, target,
+}) {
   const bar = useRef(null);
   const clamp = (t) => Math.min(1, Math.max(0, t));
   const lit = Math.round(clamp(pos) * n);
@@ -94,6 +103,7 @@ export function Level({ label, pos, text, onPos, onStep, onCommit, n = 36, wide,
     if (e.button !== 0) return;
     e.preventDefault(); // no text selection; focus by hand instead
     bar.current.focus();
+    if (pick) return pick();
     onPos(fromX(e.clientX));
     function move(m) {
       if (!m.buttons) return up();
@@ -111,6 +121,10 @@ export function Level({ label, pos, text, onPos, onStep, onCommit, n = 36, wide,
   };
   const STEP_KEYS = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 };
   const onKeyDown = (e) => {
+    if (pick && e.key === "Enter") {
+      e.preventDefault();
+      return pick();
+    }
     if (e.key === "Home" || e.key === "End") {
       e.preventDefault();
       return onPos(e.key === "Home" ? 0 : 1);
@@ -126,9 +140,15 @@ export function Level({ label, pos, text, onPos, onStep, onCommit, n = 36, wide,
     if (e.key in STEP_KEYS || e.key === "Home" || e.key === "End") onCommit?.();
   };
   return (
-    <div className={"ce-lvl" + (wide ? " wide" : "")} title={title}>
+    <div
+      className={"ce-lvl" + (wide ? " wide" : "") + (pick ? " pick" : "") + (target ? " target" : "")}
+      title={title}
+    >
       <div className="ce-lvl-top">
-        <span className="ce-lbl">{label}</span>
+        <span className="ce-lbl">
+          {label}
+          {tag && <em className={"ce-lvl-tag" + (touched ? " on" : "")}>{tag}</em>}
+        </span>
         <span className="ce-lvl-val">{text}</span>
       </div>
       <div
@@ -148,6 +168,7 @@ export function Level({ label, pos, text, onPos, onStep, onCommit, n = 36, wide,
         {Array.from({ length: n }, (_, i) => (
           <i key={i} className={i < lit ? "lit" : undefined} />
         ))}
+        {ghost != null && <b className="ce-lvl-ghost" style={{ left: `${clamp(ghost) * 100}%` }} aria-hidden="true" />}
       </div>
     </div>
   );
