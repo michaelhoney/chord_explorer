@@ -1,0 +1,286 @@
+/* ------------------------------------------------------------------------
+   CHORD PATHS — the explorer device. Shared parts are in panel/panel.css.
+   ------------------------------------------------------------------------ */
+.ce-explorer{
+  grid-template-columns:1.2fr 1fr 1.45fr .75fr;
+  grid-template-areas:
+    "plate plate plate plate"
+    "key   gen   play  out"
+    "disp  disp  disp  disp"
+    "fut   fut   fut   fut";
+}
+.ce-m-key{grid-area:key;} .ce-m-gen{grid-area:gen;}
+.ce-m-play{grid-area:play;} .ce-m-out{grid-area:out;} .ce-m-disp{grid-area:disp;}
+.ce-m-fut{grid-area:fut;}
+
+/* the key selector, laid out as a keyboard. The gaps in the top row show the
+   face rather than the seam, so they read as the spaces between black keys. */
+.ce-keys{
+  display:grid; grid-template-columns:repeat(14, 24px); grid-template-rows:46px 46px; gap:1.5px;
+  background:var(--seam); padding:1.5px; border-radius:8px; width:max-content;
+  background-image:linear-gradient(var(--face), var(--face)); background-size:100% 47.5px; background-repeat:no-repeat;
+}
+.ce-keys > button{
+  display:grid; place-items:center;
+  font:600 20px var(--cond); letter-spacing:.02em; text-transform:uppercase;
+  color:var(--unlit); transition:color .12s, text-shadow .12s, background .12s;
+}
+.ce-root .ce-keys > button{background:var(--key);}
+.ce-keys > button:hover{color:var(--print);}
+.ce-root .ce-keys > button.on{color:var(--lamp); background:#FFFDFB; text-shadow:0 0 8px var(--lamp-glow);}
+.ce-root .ce-keys > button.acc{background:#F1F1EE;}
+.ce-root .ce-keys > button.acc.on{background:#FFF9F4;}
+
+/* Generate's two lines: an amount on the left, the key that acts on the right */
+.ce-go{display:grid; grid-template-columns:max-content max-content; gap:20px 16px; align-items:end;}
+/* lifted by its ring so its outline, not its box, meets the group's bottom */
+.ce-go > .ce-key{justify-self:stretch; margin-bottom:1.5px;}
+/* a four-column face leaves the module too narrow for both at full size:
+   narrower amount keys, and the go keys drop their drawings */
+.ce-m-gen{container-type:inline-size;}
+@container (max-width:360px){
+  .ce-go{column-gap:12px;}
+  .ce-root .ce-go .ce-bg > button{min-width:40px; padding:0;}
+  .ce-root .ce-go > .ce-key{padding:0 14px;}
+  .ce-go > .ce-key svg{display:none;}
+}
+
+/* Repeat, with Every hanging under it: the groups share a width (Every's keys
+   stretch to Repeat's), so the wire from the middle of Evolve, the last key,
+   always lands on Every. Its length is the gap between the groups: the group's
+   1.5px padding, the row gap, the label's fixed line and its margin. */
+.ce-evo{display:inline-grid; row-gap:20px;}
+.ce-evo .ce-lbl{line-height:20px; transition:color .12s;}
+.ce-evo .ce-bg{display:flex;}
+.ce-evo .ce-bg > button{flex:1 1 auto;}
+.ce-evo .ce-f:first-child .ce-bg > button:last-child{position:relative;}
+.ce-evo .ce-f:first-child .ce-bg > button:last-child::after{
+  content:""; position:absolute; left:50%; top:100%; width:2px; margin-left:-1px;
+  height:51.5px; background:var(--unlit); transition:background .12s, box-shadow .12s;
+}
+.ce-evo.on .ce-f:first-child .ce-bg > button:last-child::after{background:var(--lamp); box-shadow:0 0 5px var(--lamp-glow);}
+.ce-evo.on .ce-f + .ce-f .ce-lbl{color:var(--lamp);}
+
+/* Dynamics and Humanise, side by side above the tempo */
+.ce-feel{display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:24px 30px; max-width:520px;}
+
+/* --- the display: a white e-ink panel, ink and nothing else -------------- */
+.ce-m-disp{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:34px;}
+.ce-screen{
+  background:var(--paper); color:var(--paper-ink); min-width:0;
+  border-radius:10px; padding:24px 30px 20px; position:relative;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.07), inset 0 2px 6px rgba(0,0,0,.07), 0 0 0 7px #F5F5F2, 0 0 0 8.5px var(--seam);
+  /* the panel's paper tooth */
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .025 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.ce-scr-top{
+  display:flex; flex-wrap:wrap; gap:10px 32px; align-items:center;
+  font:500 20px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--paper-dim);
+  margin-bottom:22px;
+}
+.ce-scr-top b{color:var(--paper-ink); font-weight:600;}
+.ce-gens{margin:0 0 0 auto; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:6px; max-width:100%;}
+.ce-root .ce-gen{
+  width:28px; height:28px; display:grid; place-items:center;
+  border:1.5px solid var(--paper-dim); border-radius:3px;
+  font:600 15px var(--cond); letter-spacing:0; color:var(--paper-dim);
+}
+.ce-root .ce-gen:hover{border-color:var(--paper-ink); color:var(--paper-ink);}
+.ce-root .ce-gen.on{background:var(--paper-ink); border-color:var(--paper-ink); color:var(--paper);}
+.ce-root .ce-gen.next, .ce-gen.ghost{border-style:dashed; border-color:var(--paper-ink); color:var(--paper-ink);}
+.ce-gen.ghost{cursor:default;}
+
+.ce-empty{font-size:22px; color:var(--paper-dim); line-height:1.5; margin:24px 0; max-width:60ch;}
+
+.ce-roll{width:100%; min-width:0; overflow-x:auto; padding:2px 0 8px;}
+.ce-roll-inner{position:relative;}
+.ce-roll-links{position:absolute; top:0; left:0; z-index:0; overflow:visible; pointer-events:none;}
+.ce-roll-link{fill:none; stroke:var(--paper-ink); stroke-width:1.5; stroke-linejoin:miter;}
+.ce-roll-lane{stroke:var(--paper-rule); stroke-width:1.5; stroke-dasharray:4 5;}
+.ce-roll-cols{position:relative; z-index:1; display:flex; gap:44px; align-items:flex-start;}
+.ce-roll-col{flex:0 0 auto; display:flex; flex-direction:column; gap:16px;}
+.ce-roll-notes{position:relative; display:block; width:100%;}
+.ce-root .ce-roll-note{
+  position:absolute; left:0; right:0; height:26px; padding:0 10px;
+  display:flex; align-items:center; justify-content:space-between;
+  font:600 17px var(--cond); letter-spacing:.04em; color:var(--paper-ink);
+  background:var(--paper); border:2px solid var(--paper-ink); border-radius:5px;
+  /* top is inline-styled from the pitch band; easing it means the whole roll
+     glides when a new chord widens the band instead of jumping */
+  transition:background .1s ease, color .1s ease, transform .1s ease, top .3s cubic-bezier(.3,.8,.35,1);
+}
+.ce-roll-step{font-style:normal; font-weight:500; color:var(--paper-dim);}
+/* a voice held over from the chord before */
+.ce-root .ce-roll-note.held{border-style:dashed; background:transparent;}
+.ce-root .ce-roll-note:hover{background:color-mix(in srgb, var(--paper-ink) 8%, var(--paper));}
+.ce-root .ce-roll-note:active{transform:scale(.95);}
+.ce-root .ce-roll-note:focus-visible{outline:2px solid var(--paper-ink); outline-offset:2px;}
+/* lit per note, from its onset to its release — a block chord inks in together,
+   an arpeggio walks up the column */
+.ce-root .ce-roll-note.lit{background:var(--paper-ink); color:var(--paper); border-style:solid;}
+.ce-roll-note.lit .ce-roll-step{color:color-mix(in srgb, var(--paper) 65%, transparent);}
+
+/* a freshly chosen chord: its pills fly in from the future row that spawned them */
+@keyframes ce-spawn{
+  from{transform:translate(var(--dx), var(--dy)) scale(.5); opacity:0;}
+  55%{opacity:1;}
+  to{transform:none; opacity:1;}
+}
+.ce-root .ce-roll-note.spawn{animation:ce-spawn .34s cubic-bezier(.2,.85,.3,1) backwards; transition:none;}
+@keyframes ce-settle{from{opacity:0; transform:translateY(-5px);} to{opacity:1; transform:none;}}
+.ce-roll-tilewrap.spawn{animation:ce-settle .26s ease .19s backwards;}
+
+.ce-roll-tilewrap{position:relative; display:flex; align-items:stretch; gap:4px;}
+.ce-root .ce-roll-tile{
+  flex:1 1 auto; min-width:0; position:relative;
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  padding:6px 4px 12px; border-radius:6px;
+  cursor:grab; touch-action:none; user-select:none; transition:background .11s ease;
+}
+.ce-root .ce-roll-tile:hover{background:color-mix(in srgb, var(--paper-ink) 5%, transparent);}
+.ce-root .ce-roll-tile:focus-visible{outline:2px solid var(--paper-ink); outline-offset:2px;}
+/* the chord that's sounding gets a cursor under it */
+.ce-roll-col.playing .ce-roll-tile::after{
+  content:""; position:absolute; bottom:2px; left:50%; width:28px; margin-left:-14px; height:4px;
+  background:var(--paper-ink); border-radius:1px;
+}
+.ce-chip-name{font:600 30px var(--din); letter-spacing:-.01em; white-space:nowrap;}
+.ce-chip-slash{font-weight:500; color:var(--paper-dim);}
+.ce-chip-roman{font:500 18px var(--cond); letter-spacing:.12em; color:var(--paper-dim); display:flex; gap:10px;}
+.ce-chip-dist{letter-spacing:.02em;}
+
+.ce-roll-col.dragging{z-index:3;}
+.ce-roll-col.dragging .ce-roll-tile{cursor:grabbing; background:color-mix(in srgb, var(--paper-ink) 8%, transparent);}
+.ce-root .ce-roll-col.dragging .ce-roll-note{border-width:3px;}
+
+/* remove: quiet until you go looking for it, but always reachable by keyboard */
+.ce-root .ce-roll-del{
+  position:absolute; top:-6px; right:26px; z-index:2;
+  width:24px; height:24px; line-height:1; font-size:18px;
+  display:flex; align-items:center; justify-content:center;
+  border:1.5px solid var(--paper-dim); border-radius:50%;
+  background:var(--paper); color:var(--paper-dim);
+  opacity:0; transition:opacity .12s ease, background .12s ease, color .12s ease;
+}
+.ce-roll-col:hover .ce-roll-del, .ce-roll-col:focus-within .ce-roll-del{opacity:1;}
+.ce-root .ce-roll-del:hover{background:var(--paper-ink); border-color:var(--paper-ink); color:var(--paper);}
+.ce-root .ce-roll-del:focus-visible{opacity:1;}
+@media (hover:none){.ce-root .ce-roll-del{opacity:1;}}
+.ce-roll-invert{display:flex; flex-direction:column; gap:4px; flex:0 0 auto;}
+.ce-root .ce-inv-btn{
+  display:flex; align-items:center; justify-content:center; flex:1 1 0; width:22px;
+  border:1.5px solid var(--paper-rule); border-radius:5px; color:var(--paper-dim);
+  transition:color .1s ease, border-color .1s ease;
+}
+.ce-root .ce-inv-btn:hover{color:var(--paper-ink); border-color:var(--paper-ink);}
+.ce-root .ce-inv-btn:active{transform:scale(.9);}
+
+/* transport: two short vertical banks beside the panel */
+.ce-transport{display:flex; flex-direction:column; gap:12px; align-items:center;}
+.ce-transport .ce-lbl{margin:0 0 -2px; text-align:center;}
+.ce-transport .ce-lbl ~ .ce-lbl{margin-top:18px;}
+
+/* --- futures -------------------------------------------------------------- */
+.ce-futures{display:flex; flex-direction:column;}
+.ce-fut-head{display:flex; align-items:center; gap:24px; margin-bottom:14px;}
+.ce-fut-head .ce-mod-h{flex:1; margin:0; min-width:0;}
+.ce-filter{
+  display:flex; align-items:center; gap:12px; width:340px; flex:0 1 auto;
+  border-bottom:1.5px solid var(--seam); padding:4px 2px 6px;
+  font:500 22px var(--din); color:var(--print);
+}
+.ce-filter:focus-within{border-color:var(--ink);}
+.ce-filter svg{width:20px; height:20px; flex:none;}
+.ce-filter input{border:0; background:none; font:inherit; color:var(--ink); width:100%; min-width:0; outline:none; -webkit-appearance:none; appearance:none;}
+.ce-filter input::placeholder{color:var(--print2);}
+.ce-filter input::-webkit-search-cancel-button{cursor:pointer;}
+.ce-futures-count{font:500 18px var(--cond); color:var(--print); letter-spacing:.04em; white-space:nowrap;}
+
+.ce-futures-note{display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:12px 0 0; padding:0 14px; font-size:18px; color:var(--print);}
+.ce-root .ce-futures-hint{
+  font:600 17px var(--cond); letter-spacing:.06em; color:var(--ink);
+  padding:6px 12px; border-radius:6px; border:1.5px dashed var(--seam);
+}
+.ce-root .ce-futures-hint:hover{border-color:var(--ink); border-style:solid;}
+.ce-futures-list{display:flex; flex-direction:column;}
+
+.ce-root .ce-future{
+  display:grid; grid-template-columns:130px 110px 100px 190px 60px minmax(0,1fr);
+  gap:24px; align-items:center; width:100%; text-align:left;
+  padding:12px 14px; border-radius:6px; font:500 22px var(--din); color:var(--ink);
+  transition:background .1s ease, transform .1s ease;
+}
+.ce-futures-list .ce-future + .ce-future{box-shadow:0 -1.5px 0 #EFEFEA;}
+.ce-root .ce-future:hover{background:#F6F6F2;}
+.ce-root .ce-future.head{font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print); cursor:default; padding-top:0;}
+.ce-root .ce-future.head:hover{background:none;}
+.ce-future.head > span{font:inherit;}
+.ce-root .ce-futures-axis{font:inherit; letter-spacing:inherit; text-transform:inherit; color:inherit; justify-self:start;}
+.ce-root .ce-futures-axis:hover{color:var(--ink);}
+
+/* what the chord does and how hard it pulls, in one block */
+.ce-fu-tension{display:flex; flex-direction:column; gap:5px;}
+.ce-fu-func{font:600 12.5px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print); line-height:1;}
+.ce-fu-meter{display:flex; gap:3px;}
+.ce-fu-meter i{width:8px; height:8px; background:var(--unlit); border-radius:1px;}
+.ce-fu-meter i.lit{background:var(--lamp); box-shadow:0 0 4px var(--lamp-glow);}
+/* the name is the audition target — give it a hit area and say so on hover */
+.ce-fu-name{
+  font-weight:600; font-size:28px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  justify-self:start; max-width:100%; padding:0 6px; margin:0 -6px; border-radius:5px;
+  transition:color .12s ease;
+}
+.ce-fu-name:hover{color:var(--lamp);}
+.ce-fu-roman{font-family:var(--cond); color:var(--print); letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-notes{font-family:var(--cond); color:var(--print); letter-spacing:.06em; font-size:21px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-fu-dist{font-family:var(--cond); color:var(--print); font-size:21px; white-space:nowrap;}
+.ce-fu-move{color:#4A4A45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-future:hover .ce-fu-notes, .ce-future:hover .ce-fu-move{color:var(--ink);}
+.ce-fu-res{font:600 16px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--lamp); margin-left:12px;}
+
+/* choosing: the rest of the futures clear out, the chosen one flies to the roll */
+@keyframes ce-assemble{from{opacity:0; transform:translateY(5px);} to{opacity:1; transform:none;}}
+.ce-futures-list .ce-future{animation:ce-assemble .24s ease backwards; animation-delay:calc(var(--i) * 15ms);}
+@keyframes ce-fu-leave{to{opacity:0; transform:translateX(14px);}}
+@keyframes ce-fu-chosen{
+  30%{transform:translateX(-4px) scale(1.02);}
+  to{opacity:0; transform:translateX(-26px) scale(.94);}
+}
+.ce-root .ce-future.leaving{animation:ce-fu-leave .17s ease forwards; pointer-events:none;}
+.ce-root .ce-future.chosen{animation:ce-fu-chosen .17s ease forwards; pointer-events:none; background:#F6F6F2;}
+
+/* TensionCurve, parked (see the component) */
+.ce-curve{width:100%; height:46px; display:block; margin:2px 0 12px;}
+.ce-curve-base{stroke:var(--seam); stroke-width:.5; stroke-dasharray:1.5 1.5;}
+.ce-curve-line{fill:none; stroke:var(--ink); stroke-width:1; opacity:.55; vector-effect:non-scaling-stroke;}
+
+/* --- narrower: two columns, then one ------------------------------------- */
+@media (max-width:1400px){
+  .ce-explorer{grid-template-columns:1fr 1fr; grid-template-areas:
+    "plate plate" "key gen" "play out" "disp disp" "fut fut";}
+  .ce-root .ce-future{grid-template-columns:130px 110px 100px 190px 60px;}
+  .ce-fu-move{display:none;}
+}
+@media (max-width:900px){
+  .ce-explorer{grid-template-columns:1fr; grid-template-areas:
+    "plate" "key" "gen" "play" "out" "disp" "fut";}
+  /* the keyboard fills the module rather than running off its edge */
+  .ce-keys{width:100%; grid-template-columns:repeat(14, minmax(0,1fr));}
+  .ce-root .ce-keys > button{font-size:17px;}
+  .ce-m-disp{grid-template-columns:minmax(0,1fr);}
+  .ce-screen{padding:18px;}
+  .ce-transport{flex-direction:row; flex-wrap:wrap; align-items:center;}
+  .ce-transport .ce-lbl, .ce-transport .ce-lbl ~ .ce-lbl{margin:0;}
+  /* the notes and the degree are the droppable columns — the name stays whole */
+  .ce-fu-notes, .ce-fu-roman{display:none;}
+  .ce-root .ce-future{grid-template-columns:130px minmax(0,1fr) 60px; gap:16px; padding:10px 6px;}
+  .ce-fut-head{flex-wrap:wrap;}
+  .ce-filter{width:100%;}
+}
+@media (prefers-reduced-motion:reduce){
+  .ce-root .ce-future{transition:none;}
+  .ce-futures-list .ce-future,
+  .ce-root .ce-future.leaving, .ce-root .ce-future.chosen,
+  .ce-root .ce-roll-note.spawn, .ce-roll-tilewrap.spawn{animation:none;}
+  .ce-root .ce-roll-note{transition:none;}
+}

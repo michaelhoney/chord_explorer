@@ -1,0 +1,171 @@
+/* ------------------------------------------------------------------------
+   PANEL — the hardware both devices are built from
+   A piece of hardware: white chassis, modules set into it with hairline
+   seams, lit keys instead of dropdowns, levels lit from behind. One lamp
+   colour for every light on the desk. The tokens live on .ce-root, which
+   holds both devices; each device's own layout is in its own stylesheet.
+   ------------------------------------------------------------------------ */
+body{margin:0; background:#F3F3F0;}
+.ce-root{
+  --page:#F3F3F0; --face:#FCFCFA; --seam:#E3E3DE; --hi:#FFFFFF;
+  --ink:#1C1C1A; --print:#8A8A84; --print2:#B4B4AE; --unlit:#D9D9D3; --key:#FAFAF8;
+  /* one key height for the whole face: a key in a group and a key on its own
+     stand the same height, measured by their outlines (a group's 1.5px seam
+     padding, a lone key's 1.5px ring) — the lone key's lip hangs below that */
+  --key-h:48px;
+  --lamp:#FF5F1F; --lamp-glow:color-mix(in srgb, var(--lamp) 50%, transparent);
+  --paper:#F7F6F3; --paper-ink:#1E1E1C; --paper-dim:#9A9990; --paper-rule:rgba(30,30,28,.12);
+  /* the synth's display: dark glass, lit in the lamp colour */
+  --glass:#151514; --glass-rule:#2A2A27; --glass-dim:#6E6E68; --glass-print:#8F8F88;
+  /* function hues: no longer painted on the face (function is printed in the
+     futures' tension block) — kept for TensionCurve, which is parked */
+  --home:#3D9A80; --build:#D69A38; --tension:#D6553F; --outside:#7C6BC4;
+  --din:'Barlow',system-ui,sans-serif;
+  --cond:'Barlow Semi Condensed','Barlow',system-ui,sans-serif;
+  background:var(--page); color:var(--ink); font-family:var(--din);
+  font-feature-settings:"tnum" 1; -webkit-font-smoothing:antialiased;
+  max-width:1640px; margin:0 auto; padding:24px 16px 64px;
+}
+.ce-root *{box-sizing:border-box;}
+.ce-root button{font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer;}
+.ce-root button:focus-visible, .ce-lvl-bar:focus-visible{outline:2px solid var(--lamp); outline-offset:3px;}
+
+/* the lamp picker, above the devices */
+.ce-lamps{display:flex; justify-content:flex-end; gap:10px; margin:0 0 16px;}
+.ce-lamps button{width:16px; height:16px; border-radius:50%; background:var(--sw);}
+.ce-root .ce-lamps button{background:var(--sw);}
+.ce-lamps button[aria-checked=true]{box-shadow:0 0 0 2.5px var(--page), 0 0 0 4px var(--sw);}
+
+/* --- chassis & modules ---------------------------------------------------
+   The seams are the chassis showing through a 2px gap between modules. Each
+   device sets its own grid. */
+.ce-chassis{
+  background:var(--seam); border-radius:24px; overflow:hidden;
+  display:grid; gap:2px;
+  box-shadow:0 1px 0 rgba(0,0,0,.04), 0 30px 80px -40px rgba(0,0,0,.25);
+}
+.ce-chassis + .ce-chassis{margin-top:32px;}
+.ce-mod{
+  background:var(--face); box-shadow:inset 0 1px 0 var(--hi), inset 1px 0 0 var(--hi);
+  padding:24px 30px 30px; min-width:0;
+}
+
+.ce-mod-h{
+  display:flex; align-items:baseline; gap:14px; margin:0 0 24px;
+  font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print);
+}
+.ce-mod-h b{font-weight:600; color:var(--print2);}
+.ce-mod-h::after{content:""; flex:1; height:1.5px; background:var(--seam); transform:translateY(-6px);}
+
+.ce-lbl{
+  display:block; font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase;
+  color:var(--print); margin:0 0 10px;
+}
+.ce-print{margin:0; font:500 18px var(--cond); letter-spacing:.06em; color:var(--print); line-height:1.35;}
+.ce-row{display:flex; flex-wrap:wrap; gap:24px 30px; align-items:flex-end;}
+.ce-stack > * + *{margin-top:24px;}
+
+/* --- nameplate ------------------------------------------------------------ */
+.ce-plate{grid-area:plate; display:flex; align-items:center; gap:36px; padding:22px 34px;}
+.ce-plate h1{margin:0; font:700 38px var(--din); letter-spacing:-.015em; white-space:nowrap;}
+.ce-plate h1 small{font:500 20px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print); margin-left:14px;}
+.ce-leds{display:flex; gap:28px; margin-left:auto;}
+.ce-led{display:flex; align-items:center; gap:10px; font:500 18px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--print);}
+.ce-led i{width:10px; height:10px; border-radius:50%; background:var(--unlit); transition:background .15s, box-shadow .15s;}
+.ce-led.on i{background:var(--lamp); box-shadow:0 0 8px var(--lamp-glow); transition:none;}
+/* a speaker grille: 9px dot pitch, so the height has to be a multiple of 9 or
+   the bottom row is cut in half */
+.ce-grille{width:180px; height:36px; background-image:radial-gradient(circle, #CFCFC9 1.6px, transparent 2px); background-size:9px 9px;}
+.ce-root .ce-share{width:44px; height:44px; display:grid; place-items:center; color:var(--print); border-radius:50%;}
+.ce-share svg{width:24px; height:24px;}
+.ce-share:hover:not(:disabled){color:var(--ink);}
+.ce-share:disabled{opacity:.35; cursor:default;}
+.ce-share.copied{color:var(--lamp);}
+
+/* --- key groups: cut-out legends, the chosen one lit from behind --------- */
+.ce-bg{
+  display:inline-flex; background:var(--seam); gap:1.5px; border-radius:8px; padding:1.5px;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.06); max-width:100%;
+}
+.ce-bg.col{display:flex; flex-direction:column;}
+.ce-bg > button{
+  min-width:52px; height:var(--key-h); padding:0 16px;
+  background:var(--key); display:grid; place-items:center;
+  font:600 20px var(--cond); letter-spacing:.08em; text-transform:uppercase;
+  color:var(--unlit); transition:color .12s, text-shadow .12s, background .12s;
+}
+.ce-root .ce-bg > button{background:var(--key);}
+.ce-bg > button:first-child{border-radius:6.5px 0 0 6.5px;}
+.ce-bg > button:last-child{border-radius:0 6.5px 6.5px 0;}
+.ce-bg > button:only-child{border-radius:6.5px;}
+.ce-bg.col > button{justify-items:start; text-transform:none; letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.ce-bg.col > button:first-child{border-radius:6.5px 6.5px 0 0;}
+.ce-bg.col > button:last-child{border-radius:0 0 6.5px 6.5px;}
+.ce-bg.col > button:only-child{border-radius:6.5px;}
+/* a block of keys, --cols wide: Keys marks the corner keys */
+.ce-bg.grid{display:grid; grid-template-columns:repeat(var(--cols), minmax(0,1fr)); width:100%;}
+.ce-root .ce-bg.grid > button{min-width:0; padding:0; border-radius:0;}
+.ce-root .ce-bg.grid > button.tl{border-top-left-radius:6.5px;}
+.ce-root .ce-bg.grid > button.tr{border-top-right-radius:6.5px;}
+.ce-root .ce-bg.grid > button.bl{border-bottom-left-radius:6.5px;}
+.ce-root .ce-bg.grid > button.br{border-bottom-right-radius:6.5px;}
+.ce-bg > button:hover:not(:disabled){color:var(--print);}
+.ce-root .ce-bg > button.on{
+  color:var(--lamp); background:#FFFDFB; text-shadow:0 0 8px var(--lamp-glow);
+}
+.ce-bg > button svg{width:36px; height:20px; overflow:visible;}
+.ce-bg > button.on svg{filter:drop-shadow(0 0 4px var(--lamp-glow));}
+.ce-bg > button:disabled{color:#E9E9E4; cursor:default; text-shadow:none;}
+.ce-bg > button.on:disabled{color:color-mix(in srgb, var(--lamp) 30%, #E9E9E4);}
+.ce-bg > button.on:disabled svg{filter:none;}
+
+/* --- momentary keys: do something, hold no state ------------------------- */
+.ce-root .ce-key{
+  height:var(--key-h); min-width:var(--key-h); padding:0 20px; border-radius:8px; background:var(--key);
+  box-shadow:0 0 0 1.5px var(--seam), 0 2.5px 0 var(--seam), inset 0 1px 0 #fff;
+  font:600 20px var(--cond); letter-spacing:.1em; text-transform:uppercase; color:var(--ink);
+  display:inline-grid; place-items:center; grid-auto-flow:column; gap:12px;
+  transition:transform .06s, box-shadow .06s, color .12s;
+}
+.ce-root .ce-key:active:not(:disabled){transform:translateY(2.5px); box-shadow:0 0 0 1.5px var(--seam), 0 0 0 var(--seam), inset 0 1px 3px rgba(0,0,0,.06);}
+.ce-root .ce-key:disabled{color:var(--unlit); cursor:default;}
+.ce-key svg{width:20px; height:20px;}
+.ce-root .ce-key.big{height:76px; width:76px; padding:0;}
+.ce-key.big svg{width:24px; height:24px;}
+.ce-root .ce-key.live{color:var(--lamp);}
+.ce-key.live svg{filter:drop-shadow(0 0 5px var(--lamp-glow));}
+
+/* --- levels: thin bars, ink up to the value ------------------------------ */
+.ce-lvl{display:block; min-width:0;}
+.ce-lvl-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; gap:10px;}
+.ce-lvl-top .ce-lbl{margin:0;}
+.ce-lvl-val{font:500 20px var(--din); color:var(--ink); white-space:nowrap;}
+.ce-lvl-bar{
+  display:flex; justify-content:space-between; align-items:flex-end;
+  height:26px; cursor:ew-resize; touch-action:none; user-select:none; border-radius:2px;
+}
+.ce-lvl-bar i{width:3px; height:100%; background:var(--unlit); border-radius:.75px; flex:none;}
+.ce-lvl-bar i.lit{background:var(--ink);}
+.ce-lvl.wide{max-width:520px;}
+.ce-lvl.wide .ce-lvl-bar{height:36px;}
+/* 120 bars for tempo: thinner, so they still have air between them */
+.ce-lvl.wide .ce-lvl-bar i{width:2px;}
+.ce-lvl.wide .ce-lvl-val{font-size:38px; letter-spacing:-.01em;}
+
+/* --- "No sound?" — on whichever display you're looking at ---------------- */
+.ce-nosound{
+  display:flex; gap:16px; align-items:flex-start; margin:0 0 20px; padding:14px 18px;
+  border:2px solid var(--paper-ink); border-radius:6px;
+}
+.ce-nosound p{margin:0; font-size:18px; line-height:1.45; flex:1; max-width:78ch;}
+.ce-nosound i{font-style:normal; font-weight:600;}
+.ce-root .ce-nosound-x{flex:0 0 auto; width:32px; height:32px; border-radius:4px; font-size:24px; line-height:1; color:var(--paper-dim);}
+.ce-root .ce-nosound-x:hover{color:var(--paper-ink);}
+
+@media (max-width:900px){
+  .ce-mod{padding:20px 20px 24px;}
+  .ce-plate{gap:20px; padding:18px 20px;}
+  .ce-grille, .ce-leds{display:none;}
+  .ce-plate h1{margin-right:auto;}
+  .ce-plate h1 small{display:none;}
+}

@@ -1,0 +1,125 @@
+/* ------------------------------------------------------------------------
+   THE SYNTH — the second device. Shared parts are in panel/panel.css.
+   ------------------------------------------------------------------------ */
+.ce-synth{
+  grid-template-columns:repeat(4, minmax(0,1fr));
+  grid-template-areas:
+    "plate plate plate plate"
+    "disp  disp  disp  pre"
+    "snd   snd   snd   snd"
+    "keys  keys  keys  in";
+}
+.ce-s-disp{grid-area:disp;} .ce-s-pre{grid-area:pre;} .ce-s-snd{grid-area:snd;}
+.ce-s-keys{grid-area:keys;} .ce-s-in{grid-area:in;}
+
+/* --- the display: dark glass, the trace lit in the lamp colour ----------- */
+.ce-scope{
+  display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:26px;
+  background:var(--glass); border-radius:10px; padding:18px 22px 14px;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.5), inset 0 2px 12px rgba(0,0,0,.55), 0 0 0 7px #F5F5F2, 0 0 0 8.5px var(--seam);
+}
+.ce-scope-pane{min-width:0; display:flex; flex-direction:column; gap:10px;}
+.ce-scope-top{
+  display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px;
+  font:500 16px var(--cond); letter-spacing:.14em; text-transform:uppercase; color:var(--glass-print);
+}
+.ce-scope-name{color:#D4D4CC; font-weight:600; margin-right:4px;}
+.ce-scope-key{display:inline-flex; align-items:center; gap:8px;}
+.ce-scope-key i{display:block; width:18px; height:2px; border-radius:1px; background:#77776F;}
+.ce-scope-key i.wet{height:2.5px; background:var(--lamp); box-shadow:0 0 6px var(--lamp-glow);}
+.ce-scope-key i.fill{height:10px; width:14px; background:color-mix(in srgb, var(--lamp) 32%, transparent); border-top:1.5px solid var(--lamp); border-radius:0;}
+.ce-scope-plot{position:relative; height:250px;}
+.ce-scope-plot canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
+/* the cutoff, read out beside its marker as the envelope and LFO move it */
+.ce-scope-cut{
+  position:absolute; top:4px; left:0; padding-left:8px;
+  font:600 17px var(--cond); letter-spacing:.06em; color:var(--lamp); white-space:nowrap;
+  text-shadow:0 0 8px var(--lamp-glow); pointer-events:none; will-change:transform;
+}
+.ce-scope-cut.flip{translate:-100% 0; padding:0 8px 0 0;}
+.ce-scope-axis{
+  position:relative; display:flex; justify-content:space-between; height:16px;
+  font:500 14px var(--cond); letter-spacing:.06em; color:var(--glass-dim);
+}
+.ce-scope-axis.ticks span{position:absolute; top:0; transform:translateX(-50%);}
+.ce-s-disp .ce-nosound{margin-bottom:24px;}
+
+/* --- presets: a block of keys beside the display ------------------------- */
+.ce-s-pre .ce-bg.grid{max-width:420px;}
+.ce-root .ce-s-pre .ce-bg.grid > button{font-size:17px; letter-spacing:.06em;}
+.ce-snd-note{margin-top:22px; max-width:42ch; font-size:16px;}
+
+/* --- sound: a column per group --------------------------------------------- */
+.ce-snd-cols{display:grid; grid-template-columns:repeat(5, minmax(0,1fr));}
+.ce-snd-col{padding:0 28px; min-width:0;}
+.ce-snd-col + .ce-snd-col{box-shadow:-1.5px 0 0 var(--seam);}
+.ce-snd-col:first-child{padding-left:0;}
+.ce-snd-col:last-child{padding-right:0;}
+.ce-snd-hrow{display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:8px 12px; margin:0 0 20px; min-height:24px;}
+.ce-snd-h{margin:0; font:600 20px var(--cond); letter-spacing:.16em; text-transform:uppercase; color:var(--print2); white-space:nowrap;}
+.ce-snd-col .ce-bg{display:flex;}
+.ce-root .ce-snd-col .ce-bg > button{min-width:0; flex:1; padding:0;}
+.ce-adsr{flex:none; overflow:visible;}
+.ce-adsr-line{fill:none; stroke:var(--ink); stroke-width:1.5; stroke-linejoin:round;}
+.ce-adsr-fill{fill:var(--ink); fill-opacity:.05;}
+.ce-adsr-tick{stroke:var(--seam); stroke-width:1; stroke-dasharray:2 2;}
+/* a filter envelope with no amount does nothing — drawn flat, and faint */
+.ce-adsr.flat .ce-adsr-line{stroke:var(--print2);}
+
+/* --- keys: two octaves, lit while they sound ----------------------------- */
+.ce-kb-wrap{display:flex; flex-wrap:wrap; align-items:flex-end; gap:20px 30px;}
+.ce-kb-oct{display:flex; align-items:center; gap:14px;}
+.ce-kb-oct .ce-print{min-width:5.2em; text-align:center; color:var(--ink);}
+.ce-kb{
+  --kb-bw:3.6%;
+  position:relative; display:flex; flex:1 1 520px; max-width:760px; height:132px;
+  background:var(--seam); padding:1.5px; gap:1.5px; border-radius:8px;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.06);
+  touch-action:none; user-select:none; -webkit-user-select:none; cursor:pointer;
+}
+.ce-kb:focus-visible{outline:2px solid var(--lamp); outline-offset:3px;}
+.ce-kb-w{
+  flex:1 1 0; position:relative; background:var(--key); border-radius:0 0 5px 5px;
+  display:flex; flex-direction:column; justify-content:flex-end; align-items:center; padding-bottom:8px;
+  transition:background .08s, box-shadow .08s;
+}
+.ce-kb-w:first-child{border-top-left-radius:6.5px; border-bottom-left-radius:6.5px;}
+.ce-kb-w:nth-child(15){border-top-right-radius:6.5px; border-bottom-right-radius:6.5px;}
+.ce-kb-b{
+  position:absolute; top:1.5px; width:var(--kb-bw); height:58%;
+  background:#E6E6E1; border-radius:0 0 4px 4px; z-index:1;
+  box-shadow:0 0 0 1.5px var(--seam);
+  display:flex; justify-content:center; align-items:flex-end; padding-bottom:6px;
+  transition:background .08s, box-shadow .08s;
+}
+.ce-kb-w:hover{background:#FFFFFF;}
+.ce-kb-b:hover{background:#DDDDD7;}
+.ce-kb-w.lit{background:color-mix(in srgb, var(--lamp) 14%, #FFFDFB); box-shadow:inset 0 -4px 0 var(--lamp), inset 0 0 14px var(--lamp-glow);}
+.ce-kb-b.lit{background:color-mix(in srgb, var(--lamp) 55%, #E6E6E1); box-shadow:0 0 0 1.5px var(--seam), 0 0 10px var(--lamp-glow);}
+.ce-kb-c{font:600 14px var(--cond); letter-spacing:.06em; color:var(--print);}
+.ce-kb-letter{font:600 13px var(--cond); color:var(--print2); text-transform:uppercase; margin-bottom:4px;}
+.ce-kb-b .ce-kb-letter{margin:0; color:var(--print);}
+
+/* --- in --------------------------------------------------------------------- */
+.ce-s-in .ce-bg.col{max-width:100%;}
+.ce-midi-last{color:var(--ink); min-height:1.35em;}
+
+/* --- narrower: two columns, then one ------------------------------------- */
+@media (max-width:1400px){
+  .ce-synth{grid-template-columns:1fr 1fr; grid-template-areas:
+    "plate plate" "disp disp" "pre in" "snd snd" "keys keys";}
+  .ce-snd-cols{grid-template-columns:repeat(3, minmax(0,1fr)); row-gap:36px;}
+  .ce-snd-col{padding:0 22px;}
+  .ce-snd-col:nth-child(3n+1){padding-left:0; box-shadow:none;}
+  .ce-snd-col:nth-child(3n){padding-right:0;}
+}
+@media (max-width:900px){
+  .ce-synth{grid-template-columns:1fr; grid-template-areas:
+    "plate" "disp" "pre" "snd" "keys" "in";}
+  .ce-scope{grid-template-columns:minmax(0,1fr); padding:14px 14px 10px;}
+  .ce-scope-plot{height:180px;}
+  .ce-snd-cols{grid-template-columns:minmax(0,1fr);}
+  .ce-root .ce-snd-col{padding:0; box-shadow:none;}
+  .ce-snd-col + .ce-snd-col{margin-top:30px;}
+  .ce-kb{flex-basis:100%; height:112px;}
+}
