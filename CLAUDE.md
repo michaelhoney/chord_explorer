@@ -4,25 +4,25 @@ A browser tool for exploring chord progressions by ear and by function. Pick a c
 it plays, and it shows the moves that follow — each tagged with its **root motion**
 ("up a fourth") and what it **does** harmonically ("Deceptive cadence — you expect home,
 you get the relative minor"). Build a progression, watch its tension rise and resolve,
-play it back. No backend, client-side only, [Tone.js](https://tonejs.github.io/) for audio.
+play it back. Below it sits **the synth** it plays through: a polysynth with a resonant
+lowpass/highpass filter and its own filter envelope, a scope that shows what the filter is
+doing, a tiny keyboard, and MIDI in for a controller like an AKAI MPK Mini. No backend,
+client-side only, [Tone.js](https://tonejs.github.io/) for audio.
 
 See [README.md](README.md) for the human-facing pitch, design rationale, and roadmap.
 
 ## Running it
 
-The app is a Vite + React project living in [app/](app). The working copies Vite serves are
-[app/src/harmony.js](app/src/harmony.js) (engine),
-[app/src/synth.js](app/src/synth.js) (the synth's parameter model),
-[app/src/ChordExplorer.jsx](app/src/ChordExplorer.jsx) (UI) and the two suites
-[app/src/harmony.test.js](app/src/harmony.test.js) and
-[app/src/synth.test.js](app/src/synth.test.js). **Edit those** — that's what runs. The
-repo root mirrors all five as the canonical copies; `cp` them over at a checkpoint.
+The app is a Vite + React project living in [app/](app), and everything that runs is under
+[app/src/](app/src), in four folders (see **Architecture**). That's the only copy: the repo
+root used to mirror the source files, but a flat mirror can't follow a folder tree, so it went
+when the code was split into modules.
 
 ```bash
 cd app
 npm install
 npm run dev        # http://localhost:5173/
-npm test           # vitest run — the engine suite
+npm test           # vitest run — every suite
 npm run lint       # oxlint
 ```
 
@@ -30,12 +30,13 @@ There is no root `package.json`; every script above runs from `app/`.
 
 **Deployment.** `.github/workflows/deploy.yml` builds `app/` and publishes `app/dist` to
 Cloudflare Pages (project `chords`, served at chords.michaelhoney.com) on every push to
-`main`, gated on lint and the engine suite. It needs the repo secrets
+`main`, gated on lint and the test suites. It needs the repo secrets
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The site is at the root of its domain,
 so `vite.config.js` has `base: '/'`; serving it under a path would need `base` to match.
 
 Audio starts on your first press — any click or key (browsers block autoplay until a gesture — expected). Fonts
-load from Google Fonts via `@import`; offline it falls back to system fonts and still works.
+load from Google Fonts via a `<link>` in `index.html`; offline it falls back to system fonts
+and still works.
 
 **Setup gotcha:** Tone.js imports `tslib`, which the current rolldown-based Vite doesn't
 auto-resolve. If you see `Failed to resolve import "tslib"`, run `npm install tslib` in
@@ -43,26 +44,61 @@ auto-resolve. If you see `Failed to resolve import "tslib"`, run `npm install ts
 
 ## Architecture
 
-Two **pure, import-free model modules** — [app/src/harmony.js](app/src/harmony.js) (the
-functional-harmony engine) and [app/src/synth.js](app/src/synth.js) (the synth's parameter
-model) — and a **React/Tone.js presentation layer** in
-[app/src/ChordExplorer.jsx](app/src/ChordExplorer.jsx), which imports both modules' named
-exports. Keep that seam clean; it's the main lever for testability and for everything on the
-roadmap. Neither model has **any imports at all** — not React, not Tone — so
-[app/src/harmony.test.js](app/src/harmony.test.js) and
-[app/src/synth.test.js](app/src/synth.test.js) run in plain Node with no audio context.
+Two devices on one desk. **Chord Paths**, the explorer, is a sequencer: it decides which
+chords, and how they're struck. **The synth** is an instrument: the explorer plays it, and so
+do its own keyboard and a MIDI controller. [app/src/App.jsx](app/src/App.jsx) is the desk —
+the only file that imports both — and holds what they share: the synth's engine (which the
+explorer plays through), the page's MIDI access, the lamp colour, and whether the browser is
+refusing to make sound.
 
-`synth.js` is the same bargain as `harmony.js`, applied to sound: it knows what the knobs
-are, what they mean, what a preset is and how a patch packs into a URL, and it builds no
-audio nodes. Reading it top to bottom: **`SYNTH_PARAMS`** (one entry per control — range,
-`log` scaling, formatting, and the tooltip that is the only place each control explains
-itself), **`SYNTH_GROUPS`** (derived from each param's `group`, so a new knob only has to
-name its column to appear in it), **`PRESETS`**, **`paramToPos`/`paramFromPos`** (sliders
-always run 0–1000 integers whatever they control — float `step` drifts and a log parameter
-has no usable linear step), **`packSynth`/`unpackSynth`**, **`lfoRange`**, and
-**`velocityCurve`**.
+```
+app/src/
+  App.jsx, url.js        the desk, and the address bar both devices write into
+  chords/                the explorer
+    harmony.js             the functional-harmony engine                  pure, no imports
+    perform.js             how a chord is struck → note events             pure, no imports
+    state.js               the explorer's slice of the URL                 pure
+    ChordExplorer.jsx      the device; with PianoRoll, FutureList, TensionCurve (parked)
+    futures.js, roll.js    small helpers the components share
+  synth/                 the instrument
+    params.js              the patch model: knobs, presets, wire format    pure, no imports
+    dsp.js                 the display's maths: response curve, trigger     pure, no imports
+    engine.js              the signal chain — the only file that builds audio nodes
+    Synth.jsx              the device; with Scope and Keyboard
+  midi/                  access.js (one access for the page), out.js, in.js, messages.js (pure)
+  panel/                 parts.jsx, symbols.jsx, panel.css — the hardware both faces are built from
+```
 
-The engine, reading top to bottom:
+Keep the seams clean; they're the main lever for testability and for everything on the
+roadmap. The **model modules** — `harmony.js`, `perform.js`, `params.js`, `dsp.js`,
+`messages.js` — have **no imports at all**, not React, not Tone, not each other (`state.js`
+builds on harmony and perform, and nothing else), so every suite runs in plain Node with no
+audio context. The **explorer never builds an audio node**: it hands `chordEvents`' note
+events to `engine.play` or a MIDI port, and Tone is only its clock. The **synth knows nothing
+about chords**: it plays notes, from whoever sends them.
+
+`synth/params.js` is the same bargain as `harmony.js`, applied to sound: it knows what the
+knobs are, what they mean, what a preset is and how a patch packs into a URL, and it builds no
+audio nodes. Reading it top to bottom: **`SYNTH_PARAMS`** (one entry per control, in the
+order the panel shows them — range, `log` scaling, formatting, the tooltip that is the only
+place each control explains itself, and `legacy`: what a link written before the parameter
+existed gets, when that should differ from the default preset), **`SYNTH_GROUPS`** (derived
+from each param's `group`, so a new knob only has to name its column to appear in it),
+**`SYNTH_WIRE`** (the order a patch is written into a link — append-only, see Invariants),
+**`PRESETS`**, **`paramToPos`/`paramFromPos`** (levels always run 0–1000 integers whatever
+they control — float steps drift and a log parameter has no usable linear step),
+**`packSynth`/`unpackSynth`/`retiredFromSynth`**, and the derived settings
+**`lfoCents`/`contourCents`/`cutoffAt`**.
+
+`synth/dsp.js` is the display's arithmetic: **`filterResponse`** (the filter's gain in dB,
+from the coefficient formulas the Web Audio spec gives for BiquadFilterNode — Q read in dB,
+two stages for −24dB/oct — and checked against the browser's own `getFrequencyResponse` to
+within 0.00001dB, so the curve on the display is the filter you hear), **`logFreqs`/
+`logPos`** (the octave axis), **`spectrumAt`** (FFT bins onto that axis: the loudest bin
+between two display points, so a harmonic never falls between the cracks), and the scope's
+**`scopeSpan`/`findTrigger`/`sampleFrame`** (below).
+
+The harmony engine, `chords/harmony.js`, reading top to bottom:
 
 - **Pitch-class layer** — `SHARP` / `FLAT` / `FLAT_KEYS`, `nameOf`. Notes are integers
   0–11; spelling is cosmetic and never affects audio.
@@ -153,20 +189,22 @@ The engine, reading top to bottom:
   Evolve as one row of keys — and Evolve's **Every** 1/2/4/8, hung under it in `.ce-evo`: the two groups share a width, and
   a wire drops from the Evolve key onto Every, lit in the lamp colour while Evolve is on — its
   length is fixed CSS arithmetic, so it depends on `.ce-evo`'s row gap and label line-height), **03 Playback** (voicing,
-  bass, hold bass, arpeggio, -4-, tempo), **04 Out** (route and MIDI port), then the
-  display with the **transport** beside it, **05** the futures and **06 Sound**. Generate sits
+  bass, hold bass, arpeggio, -4-, Dynamics and Humanise, tempo), **04 Out** (route and MIDI port), then the
+  display with the **transport** beside it, and **05** the futures. Generate sits
   with Key rather than the transport because it sets up material rather than editing what's
   there — the same reason changing key clears the progression. Four columns, two below
-  1400px, one below 900px. Sharing is about the page, so it's an icon on the nameplate. The
-  whole face is built from a few parts, defined together after the component:
+  1400px, one below 900px. Sharing is about the page, so it's an icon on the nameplate — and
+  it copies the whole desk, the synth's patch included. The synth is a second chassis below
+  (see **The synth device**). Both faces are built from a few parts in `panel/parts.jsx`:
   **`Keys`** (a row of keys with cut-out legends, the chosen one lit — every former dropdown
-  became one, so the choices are always in view), **`Toggle`** (a key that stays lit, set in
-  a `.ce-bg` alone or with others) — every key on the face stands **`--key-h`** tall by its outline, grouped or alone (the transport's `.big` keys excepted), **`RootKeys`** (the key laid out as an octave),
+  became one, so the choices are always in view; with `cols`, a block of them, like the 4×4
+  MIDI channels and the 3×3 presets), **`Toggle`** (a key that stays lit, set in
+  a `.ce-bg` alone or with others) — every key on the face stands **`--key-h`** tall by its outline, grouped or alone (the transport's `.big` keys excepted), **`RootKeys`** (the key laid out as an octave, in the explorer),
   and **`Level`** (below). Legends are words where
-  a word is short and small line drawings (`SYM`, `WAVE_SYM`) where it isn't — cryptic on
+  a word is short and small line drawings (`SYM`, `WAVE_SYM`, `FILTER_SYM`, in `panel/symbols.jsx`) where it isn't — cryptic on
   purpose, with a tooltip on every key. **One lamp colour** lights everything that's on: a
-  random pick from `LAMPS` on each visit, changeable from the dots above the chassis, set as
-  `--lamp` on `.ce-root`; not in the URL, since it's about the visit, not the progression.
+  random pick from `LAMPS` on each visit (in `App.jsx`), changeable from the dots above the
+  chassis, set as `--lamp` on `.ce-root`, which holds both devices; not in the URL, since it's about the visit, not the progression.
   Pressing the key or mode that's already lit must not clear the progression, hence the
   early return in `changeKey`.
 - **`Level`** — what every slider became: a row of thin bars, lit in ink up to the value. It
@@ -174,27 +212,76 @@ The engine, reading top to bottom:
   ten), Home and End. `pos` is 0–1 and the caller maps it; `onStep` optionally owns the
   arrows (tempo's 120 bars, 30–150, are one BPM each, and an arrow is one BPM). The drag is driven from
   `window` listeners that also let go when `buttons` is 0 — the same lesson as the roll's
-  reordering. `onCommit` fires on release, which is when the Sound module auditions.
-- **`useMidiOut()`** — behind module 04's **Route** keys (Int / MIDI) and port list. `status` is a small state machine
+  reordering. `onCommit` fires on release, which is when the synth auditions.
+- **MIDI** — one **`useMidiAccess()`** for the page (`midi/access.js`), shared by the
+  explorer's Out and the synth's In: `status` is a small state machine
   (`unsupported | insecure | idle | asking | ready | denied`) whose copy lives in
-  `MIDI_STATUS`; on a successful enable it selects the first available port straight away —
-  you didn't grant MIDI access to keep hearing the built-in synth — but only there, never on
-  a later `onstatechange`, since a device appearing mid-session shouldn't reroute you without
-  asking. Support and secure context are checked **before** the control is offered,
-  because Safari has never shipped Web MIDI and a dead dropdown explains nothing. Access is
-  requested without sysex (notes don't need it, and asking prompts harder) from a click, and
-  `onstatechange` refreshes the port list on hot-plug. `send` rebases Tone's audio clock onto
-  the `performance.now()` stamp `output.send` wants. Picking a port **replaces** the synth
-  rather than doubling it. `panic()` is not optional politeness: hardware holds a note until
-  told otherwise, so Stop and every port change do `clear()` (drop queued note-offs, or they
-  land after the reset) then all-notes-off. Not persisted to the URL — port ids are
+  `MIDI_STATUS`, and `enable()` resolves to the access (or null), sharing one prompt between
+  callers. Support and secure context are checked **before** a control is offered, because
+  Safari has never shipped Web MIDI and a dead dropdown explains nothing. Access is requested
+  without sysex (notes don't need it, and asking prompts harder) from a click. Each side
+  watches its own ports through **`usePorts`**, a `statechange` *listener* rather than
+  `onstatechange`, since both watch the same access.
+  **`useMidiOut(midi)`** (`midi/out.js`) is behind the explorer's module 04 **Route** keys
+  (Int / MIDI) and port list. Enabling from *there* selects the first output straight away —
+  you didn't grant MIDI access to keep hearing the built-in synth — but only there: not on a
+  later `statechange` (a device appearing mid-session shouldn't reroute you without asking),
+  and not when it was the synth's In that asked for access. `send` rebases Tone's audio clock
+  onto the `performance.now()` stamp `output.send` wants. Picking a port **replaces** the
+  synth rather than doubling it. `panic()` is not optional politeness: hardware holds a note
+  until told otherwise, so Stop and every port change do `clear()` (drop queued note-offs, or
+  they land after the reset) then all-notes-off. Not persisted to the URL — port ids are
   machine-local and a shared link carrying one would be nonsense. The **channel** (`Chan`,
   sixteen keys four by four, live only while routed to MIDI) follows the same rule: it's
   about your rig, not the progression. Changing it panics the old channel first, exactly as
   changing port does.
-- **`useSynth(sound)`** — the chain the Sound panel drives:
-  `PolySynth → Filter → Distortion → Chorus → Reverb → Destination`, with an **LFO on the
-  filter's cutoff**. Audio starts on the first **`pointerdown` or `keydown` anywhere on the
+  **`useMidiIn(midi, onMessage)`** (`midi/in.js`) is behind the synth's module 04 **In**:
+  `source` is `off`, `all` (every input, every channel — an MPK Mini's keys and pads default
+  to different channels, and both should play) or one port. It sets `onmidimessage` rather
+  than adding a listener, because setting it is what opens the port in every browser that has
+  Web MIDI, re-attaches when the set of matching inputs changes (opening a port fires
+  `statechange` too, hence the comparison), and sends an `alloff` when it stops listening,
+  since whatever was held would never get its note-off. Messages go through the pure
+  **`parseMidi`** (`midi/messages.js`): note on/off (velocity 0 is an off), the sustain pedal
+  (CC64), pitch bend (±2 semitones, `BEND_SEMITONES`), all-notes-off; clock, sysex and
+  aftertouch are ignored, and other CCs pass through unused. Also not in the URL.
+- **The engine** (`synth/engine.js`, the only file that builds audio nodes) — a plain
+  `Engine` object behind a thin **`useSynthEngine(sound)`** hook, so its methods are stable
+  and the devices pass it round without re-rendering on its account. The chain:
+
+  ```
+  seq  ┐  each voice: osc → filter → amp env        ┌→ (tap: out of the filter)
+       ├────────────────────────────────────→ post ┤
+  keys ┘                                           └→ drive → chorus → reverb → out
+  each voice: osc → its own copy of the amp env → dry → (tap: into the filter)
+              filter env → contour ┐
+  LFO → lfoDepth ──────────────────┴→ that voice's filter detune
+  ```
+
+  **Per-voice filters.** A `Voice` subclasses `Tone.Synth` and puts a −24dB `Tone.Filter`
+  between the oscillator and the amp envelope, with its own **filter envelope** — so every
+  note opens and closes the filter for itself, the way a polysynth's voice cards do. The
+  envelope has Attack, Decay and Sustain and no release of its own: it closes over the amp's
+  release, so a note darkens as it fades, Minimoog-style. **Modulation goes on `detune`.**
+  The filter envelope (scaled by the `contour` gain to `filterEnv` octaves of cents) and the
+  shared LFO (`lfoCents`) both connect to the voice filter's `detune`, where they add:
+  cutoff × 2^(octaves), the way a control voltage moves a hardware filter. That leaves
+  `frequency` to the Cutoff level alone. (It also retires an old trap: connecting a signal to
+  a `Tone.Signal` *replaces* its value, so the LFO used to own the cutoff outright and carry
+  the setting in its own range.) The LFO reaches each voice through a **gain of the voice's
+  own**, never straight to the detune: Tone's `disconnect()` can't resolve a Signal's
+  parameter and falls back to disconnecting the source from *everything* — for a shared LFO,
+  every other voice. **Two pools, one sound**: `seq` plays the explorer's chords and `keys`
+  the keyboard and MIDI in, so a key you hold is never released by a chord that shares its
+  note, and Stop (`release()`, the seq pool only) never cuts a held key. Everything after the
+  voices is built **once** and left in place, wet at zero where that means off — rebuilding
+  the chain when a level moves would cut the sound you're trying to listen to — and
+  `applySound(nodes, s)` retunes what already exists (`voiceSettings` for both pools via
+  `PolySynth.set`, which every new voice is also built from). That's the whole point of a
+  knob, and it's why a preset change mid-playback just re-voices the run. `reverb.decay` is
+  the one setter that re-renders an impulse response — async and audible — so it's applied
+  only when the value has actually changed.
+  **Starting audio.** It starts on the first **`pointerdown` or `keydown` anywhere on the
   page**, from capture-phase listeners on `window` — **never from a `click` handler**. Safari
   27, under its default Auto-Play setting ("Stop Media with Sound"), grants user activation at
   `pointerdown` and has withdrawn it by `pointerup` (measured: 167ms later, `isActive` false by
@@ -214,64 +301,105 @@ The engine, reading top to bottom:
   press it answers `null`. That's the other half of the fix: the futures list auditions on
   **hover**, and on the way to clicking a row the pointer crosses other names, so audio used
   to get set up from a `mouseenter` — not a gesture, blocked, and the block stuck. Callers of
-  `ensure()` bail on `null`. **`blocked`** is the other thing it returns: a
-  second after a press asked for audio, the context either runs or it doesn't, and if it
-  doesn't the progression view shows a dismissible **"No sound?"** notice with the Safari
-  Auto-Play path (host name filled in) and a generic hint for other browsers. Judged by what
-  happened, not by sniffing the browser, so it covers Safari's "Never Auto-Play" and anything
-  else that refuses, and never appears when sound works; a later press that gets through
-  clears it. Dismissal is per visit and not in the URL. `live` is a ref so the chain comes up with the settings in force
-  at the first press, not the ones from mount. Everything after the synth is built **once** and left in place, wet at zero where
-  that means off — rebuilding the chain when a slider moves would cut the sound you're
-  trying to listen to — and `applySound(nodes, s)` retunes what already exists. That's the
-  whole point of a knob, and it's why a preset change mid-playback just re-voices the run.
-  Two details bite if you touch it: **the LFO owns the cutoff outright**, because connecting
-  a signal to a `Tone.Signal` *replaces* its value rather than adding to it, so the sweep's
-  endpoints have to carry the cutoff setting themselves (`lfoRange`, centred in octaves;
-  depth 0 collapses `min` and `max` together, which is exactly a filter that isn't moving).
-  And `reverb.decay` is the one setter that re-renders an impulse response — async and
-  audible — so it's applied only when the value has actually changed. `ensure` returns the
-  `PolySynth`; `release` exists because `Transport.stop()` unschedules what hasn't played
-  but a note already triggered rings out on its envelope.
-- **`velocityCurve(midi, sound, rand)`** (in `synth.js`) — per-note velocity and a few ms of
-  onset drift. A chord with every voice at the same velocity is an organ; **Dynamics**
+  `ensure()` bail on `null`. **`blocked`** is the hook's other return: a second after a press
+  asked for audio, the context either runs or it doesn't, and if it doesn't both devices'
+  displays show a dismissible **"No sound?"** notice (`NoSound`) with the Safari Auto-Play
+  path (host name filled in) and a generic hint for other browsers. Judged by what happened,
+  not by sniffing the browser, so it covers Safari's "Never Auto-Play" and anything else that
+  refuses, and never appears when sound works; a later press that gets through clears it.
+  Dismissal is per visit, covers both devices, and is not in the URL. `engine.sound` is
+  assigned during render so the chain comes up with the settings in force at the first
+  press, not the ones from mount.
+  **What it offers.** `play(events, t)` triggers `chordEvents`' list note by note on the seq
+  pool (per-note velocity needs per-note calls) and remembers it as `last`; `release()` cuts
+  the seq pool. `noteOn`/`noteOff` are live notes on the keys pool at `Tone.immediate()` —
+  *not* `Tone.now()`, which adds the 100ms scheduling look-ahead: fine for a sequence, far too
+  late under a finger. A note let go before audio came up (the first click on a cold page
+  usually is) still plays, for as long as it was held — or the first thing the keyboard
+  teaches you is that it's broken. `setPedal` holds released notes until it lifts; `bend`
+  detunes both pools; `allNotesOff`. `audition()` replays `last` — the chord you just picked,
+  the note you just struck, C major before anything — unless the transport is running or a
+  key is held, which are already demonstrating the change. `subscribe(fn)` reports which
+  notes are sounding (held live notes, and sequenced notes between their start and end,
+  worked out on animation frames against the audio clock only while something is scheduled),
+  for the keyboard's lights and the Note lamp. `readScope(buf)` fills the display's buffers
+  from three AnalyserNode taps (plain analysers run whether or not they lead anywhere, so the
+  dry copy is heard by the scope and nothing else) and reports where the filter is: the
+  newest sounding voice's envelope value (`Envelope.getValueAtTime`), the LFO's (a tap of its
+  own), and the lowest note sounding.
+- **`velocityCurve(midi, feel, rand)`** (in `chords/perform.js`) — per-note velocity and a few
+  ms of onset drift. A chord with every voice at the same velocity is an organ; **Dynamics**
   spreads them (firm bass, singing top, inner voices tucked under) and **Humanise** scatters
   the result. `rand` is **injected**, the same bargain `suggestLoop` makes, and it draws the
   same number of times whatever Humanise is, so turning it down doesn't reshuffle which note
-  gets which wobble. This is why `playVoiced` triggers **note by note** rather than handing
-  `triggerAttackRelease` the whole chord — per-note velocity needs per-note calls.
-  `playVoiced` hands the same **list of note events** (pitch, onset, length, velocity) to the
-  synth or the MIDI port, so the two can't drift apart. The list comes from **`chordEvents
-  (upper, bass, opts, rand)`** in `synth.js` — pure, so block chord vs arpeggio, the arp order,
-  `-4-`, hold bass, velocity and humanise are all decided in one tested place. Chords travel
-  through the component as **`{ upper, bass }`**, the bass named rather than folded in as the
-  lowest note: it isn't always the lowest (an inversion can roll an upper voice under it), and
-  hold bass has to know which note it is.
-  Dynamics and Humanise are about how a chord is *played* rather than how it sounds, so they
-  go out the **MIDI port too**; everything else in the panel is timbre, which belongs to
-  whatever instrument is on the other end.
-- **The Sound module** — module 06, always open at the foot of the face, driven entirely off
-  `SYNTH_PARAMS`, so adding a knob is a line in that table rather than a line of markup: a
-  number becomes a `Level`, an enum (the wave) becomes `Keys` with `WAVE_SYM` legends.
-  The one drawing is **`EnvelopeGraph`**, beside the Envelope heading: the ADSR as a shape,
+  gets which wobble. `playVoiced` hands the same **list of note events** (pitch, onset,
+  length, velocity) to the synth's engine or the MIDI port, so the two can't drift apart. The
+  list comes from **`chordEvents(upper, bass, opts, rand)`**, also in `perform.js` — pure, so
+  block chord vs arpeggio, the arp order, `-4-`, hold bass, velocity and humanise are all
+  decided in one tested place. Chords travel through the component as **`{ upper, bass }`**,
+  the bass named rather than folded in as the lowest note: it isn't always the lowest (an
+  inversion can roll an upper voice under it), and hold bass has to know which note it is.
+  **Dynamics and Humanise are the player's, not the synth's** — they're how a chord is
+  *struck*, not how it sounds — so they live in the explorer's Playback module (`FEEL`, two
+  `Level`s), go out the MIDI port too, and travel in the explorer's link as `dy=`/`hu=`. They
+  used to be synth parameters; a link from then carried them in slots 14–15 of `sy=`, which
+  `retiredFromSynth` reads back out and `App`'s `bootFrom` hands to `decodeState`.
+- **The synth device** (`synth/Synth.jsx`) — a second chassis: nameplate (lamps **Note**, lit
+  while anything sounds, its own small subscription so the panel doesn't re-render per note;
+  and **MIDI In**, lit briefly by each message), the **display** with **01 Presets** beside
+  it, **02 Sound**, **03 Keys** and **04 In**. Four columns; two below 1400px; one below 900.
+  **Presets** are a 3×3 block of keys (`Keys cols={3}`), the ninth, **—**, lighting when the
+  levels match none of them; the name is **derived** by comparing values rather than stored,
+  so a shared link carrying only numbers still opens with the right preset lit, and nudging
+  one level honestly lights **—**. Picking one plays it. **Sound** is driven entirely off
+  `SYNTH_PARAMS`, a column per group, so adding a knob is a line in that table rather than a
+  line of markup: a number becomes a `Level`, an enum becomes `Keys` with drawn legends (the
+  wave, the filter type). **`EnvelopeGraph`** sits beside each envelope's heading: the shape,
   its segment widths taken from the levels' positions rather than from seconds — attack is on
-  a log scale from 2ms, and drawn in linear time a short attack is just a vertical line.
-  Releasing a level **auditions** the chord you're on (or the key's tonic, if the progression
-  is empty) — you can't design a sound you can't hear — but not while playback is running,
-  which is already making the point. The preset name is **derived** by comparing values
-  rather than stored, so a shared link carrying only numbers still opens with the right
-  preset lit, and nudging one level honestly lights **—** (custom).
-- **Random start** — `boot` is `decodeState(search) || randomStart()`: only a URL with **no
-  query string at all** gets a random key and a 4-bar suggestion; any parameter, even `?k=0`,
-  opens exactly as written, so a shared link or a reload is never re-rolled. The URL sync
-  then writes the rolled state into the address bar, so a reload keeps it.
-- **URL sync** — the query string is computed every render (`path`), but written to the
-  address bar only after 300ms without a change, and flushed on `pagehide`. Never per change:
-  a slider drag changes state every frame, and Safari allows 100 `replaceState` calls per 10
-  seconds and then **throws** — from inside an effect, which unmounts the whole app to a white
-  page (Chrome just throttles, with a warning). `writeUrl` swallows a failed write regardless;
-  a lagging address bar is cosmetic. Share copies the computed `path`, not `location.href`,
-  so it never copies a URL that's up to 300ms stale.
+  a log scale from 2ms, and drawn in linear time a short attack is just a vertical line. The
+  filter envelope's is scaled by its Amount, so at zero it lies flat and faint, which is what
+  it does to the filter. Letting go of any level **auditions** (see the engine). **Keys**
+  (`Keyboard.jsx`) is 25 keys, C to C like an MPK Mini, C3–C5 by default with octave keys
+  (C1 to C8 at the top): press and slide to play, driven from `window` listeners because a
+  slide crosses keys and a release lands anywhere; with the keyboard *focused*, the computer
+  keys play it DAW-style (A–K white, W E T Y U black, Z/X octave) — only while focused, so
+  typing elsewhere never plays a note, and blur lets go of everything typed. Space still means
+  the transport. A key is lit while its note sounds, whoever is playing it, so the explorer's
+  chords show up there too. The MIDI readout and lamp are throttled: pitch bend alone can
+  send a hundred messages a second, and each would re-render every level on the panel.
+- **The scope** (`synth/Scope.jsx`) — dark glass, lit in the lamp colour, two panes comparing
+  the same two signals: the voices with no filter (grey, the dry tap) and out of it (lit,
+  tapped before drive and the effects, so the only difference between the traces is the
+  filter). **Wave** is held still the way a hardware scope holds it: `scopeSpan` shows three
+  periods of the lowest note sounding (4–45ms), and `findTrigger` picks among the rising zero
+  crossings the one whose frame best matches the last frame drawn — a single note has one
+  crossing a cycle and any will do, but a chord crosses several times at points that look
+  nothing alike, and this locks onto its shape. It triggers on the dry signal (a raw
+  oscillator has the cleanest edges) and draws both from the same moment, so any shift
+  between them is the filter's; the vertical scale eases (fast down, slow up). **Spectrum**
+  puts both on an octave axis with the filter's response over them — `filterResponse` at
+  `cutoffAt(sound, env, lfo)`, so the line moves with the envelope and the LFO and the cutoff
+  is read out live beside its marker; the dashed line is where the envelope opens it to. The
+  spectra are offset so the loudest incoming harmonic sits on 0dB, which puts the outgoing
+  harmonics where the curve says they should be. Drawn on canvases from an animation frame,
+  never through React state, paused off-screen (IntersectionObserver), and before audio it
+  still draws the curve from the levels — and a flat trace, the way a scope at rest does.
+- **Random start** — App's `bootFrom` is `decodeState(search, retiredFromSynth(sy)) ||
+  randomStart()`: only a URL with **no query string at all** gets a random key and a 4-bar
+  suggestion; any parameter, even `?k=0`, opens exactly as written, so a shared link or a
+  reload is never re-rolled. The URL sync then writes the rolled state into the address bar,
+  so a reload keeps it.
+- **URL sync** (`url.js`) — the address bar is shared: each device owns a **slice** of the
+  query string through **`useUrlSlice(name, qs)`** (the explorer its key and progression via
+  `encodeState` in `chords/state.js`, the synth its `sy=` patch), and the bar is their sum, so
+  neither device knows the other's parameters. Slices are set in a layout effect and written
+  to the address bar only after 300ms without a change, and flushed on `pagehide`. Never per
+  change: a level drag changes state every frame, and Safari allows 100 `replaceState` calls
+  per 10 seconds and then **throws** — from inside an effect, which unmounts the whole app to
+  a white page (Chrome just throttles, with a warning). A failed write is swallowed
+  regardless; a lagging address bar is cosmetic. Share copies **`currentPath()`**, composed
+  at the moment of the click, not `location.href`, so it never copies a URL that's up to
+  300ms stale.
 - **Playback runs on `Tone.getTransport()`** as **one repeating tick per chord slot**
   (`scheduleRepeat`), and each tick reads the progression *live* from `liveRef` at a
   `cursor`. So an edit made while it plays (an inversion, a reorder, a chord added or
@@ -320,13 +448,13 @@ The engine, reading top to bottom:
   every other bar as it was, `inv` and `id` included, and won't put back what a bar held in
   the `previous` generation. Without that, evolving a 4-bar loop flips one bar back and forth.
 - **Component + `FutureList` / `FutureRow` + `PianoRoll`** — state is `root, mode, add7,
-  voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, tempo, hist, queued, playingIdx, playing`, plus `exiting` / `spawn` for the
+  voiceLead, bassOn, arp, arpFour, arpOrder, holdBass, loop, evolve, tempo, feel, hist, queued, playingIdx, playing`, plus `exiting` / `spawn` for the
   choose choreography. **Arpeggio** makes `playVoiced` play one note per step, the steps
   spread evenly across the chord's slot (`span` — the whole slot in playback, so the last step
   runs straight into the next chord), each note gated to 0.9 of its step with the envelope's
   release ringing on. It used to be a strum — 0.16s-apart onsets held to the end of the slot —
   which left a triad finished in a third of a second and then silent: the "pause after the
-  third note". The order comes from **`arpSequence`** in `synth.js`, pure with `rand`
+  third note". The order comes from **`arpSequence`** in `chords/perform.js`, pure with `rand`
   injected: `arpOrder` is `rise` or `random` (a fresh Fisher–Yates shuffle each time the chord
   plays), and **`-4-`** (`arpFour`) pads a three-note chord to four steps by returning to the
   second note played — 1 3 5 3 rising — so triads and sevenths keep the same rhythm. Chords of
@@ -417,10 +545,13 @@ The engine, reading top to bottom:
   stale: adding a column reflows the stage and shifts the list), then each landed pill's
   rect is measured and handed `--dx` / `--dy` back to that point. The `ce-spawn` keyframe
   plays it in reverse. Audio fires on the click, never behind the animation.
-  `TensionCurve` still exists in the file but is currently not rendered (removed from the
-  progression view for now), and it's the one thing still painted in the function hues. Styles live in the `CSS` template string with design tokens as
-  CSS custom properties — **no backticks in that string**, they terminate the template
-  literal.
+  `TensionCurve` still exists, in its own file, but is currently not rendered (removed from
+  the progression view for now), and it's the one thing still painted in the function hues.
+- **Styles** are plain `.css` files, one per module, imported by the component that owns
+  them and bundled by Vite: `panel/panel.css` (the design tokens on `.ce-root`, and the
+  hardware both faces share — chassis, modules, keys, levels, lamps), `chords/chords.css`
+  and `synth/synth.css` (each device's grid and its own parts). They used to be one template
+  string inside the component, which is gone along with its no-backticks rule.
 
 ## Invariants — don't break these
 
@@ -430,17 +561,26 @@ The engine, reading top to bottom:
   `tension`, which lights that block's meter and plots on the curve. If you add a chord type,
   wire up both. Function used to be shown as colour everywhere; the hardware redesign moved it
   into words, so the face could keep one lamp colour and a mono display.
-- **The model modules are pure and import-free.** Everything in `harmony.js` and `synth.js`
-  takes data and returns data — no React, no DOM, no Tone. Don't add an import to either
-  file; if something needs a library, it belongs in the presentation layer. Keep the pitch
-  math in plain integers. `synth.js` in particular describes the synth but never builds it:
-  the moment it needs `Tone`, the split has gone wrong.
+- **The model modules are pure and import-free.** Everything in `harmony.js`, `perform.js`,
+  `params.js`, `dsp.js` and `messages.js` takes data and returns data — no React, no DOM, no
+  Tone, and no imports at all. Don't add one; if something needs a library, it belongs in the
+  presentation layer. Keep the pitch math in plain integers. `params.js` in particular
+  describes the synth but never builds it: the moment it needs `Tone`, the split has gone
+  wrong.
+- **Only the engine builds audio nodes, and the devices don't reach into each other.** The
+  explorer hands note events to `engine.play` (or a MIDI port) and uses Tone only as a clock;
+  the synth never imports anything from `chords/`. `App.jsx` is the one place both meet. If
+  the explorer wants something new from the synth, it's a method on the engine.
 - **A knob is a row in `SYNTH_PARAMS`, not a piece of markup.** Label, range, scaling,
   formatter, group and tooltip all live in the table; the panel renders whatever is in it.
-  Adding a control means adding an entry and applying it in `applySound` — and **appending**
-  to the table, never reordering it, because `SYNTH_ORDER` is what every shared link's `sy=`
-  was written against.
-- **Audio starts on `pointerdown`/`keydown`, never on `click`.** `useSynth`'s `unlock()` is
+  Adding a control means adding an entry (in the column you want it, in the order you want
+  it) and applying it in `applySound` — and **appending** its key to `SYNTH_WIRE`, never
+  reordering or removing one, because that's what every shared link's `sy=` was written
+  against. A parameter that leaves the synth is retired in place (`~name`, written empty), as
+  Dynamics and Humanise were. Give a new parameter a `legacy` value if an old link should get
+  something other than the default preset's — the filter envelope's is 0, so an old patch
+  doesn't open with a filter sweep it never had.
+- **Audio starts on `pointerdown`/`keydown`, never on `click`.** The engine's `unlock()` is
   the only thing that calls `Tone.start()` for the first time, from capture-phase listeners on
   `window`. A click has lost its user activation in Safari 27 by the time its handler runs, so
   anything that starts audio from `onClick` is silent there — and silent with no error, which
@@ -454,8 +594,8 @@ The engine, reading top to bottom:
   pure function of the progression and the toggle, memoised in the component. `choose` plays
   the incremental voicing computed from the current chain end so it matches the recompute.
   Don't stash midi notes on progression items — toggling voice-leading must re-realise cleanly.
-- **Tailwind is not available** and was avoided deliberately — styles are plain CSS in the
-  `CSS` string. Preserve the CSS-variable token system. `.ce-root button` resets every button,
+- **Tailwind is not available** and was avoided deliberately — styles are plain CSS files
+  (see **Styles**). Preserve the CSS-variable token system. `.ce-root button` resets every button,
   so a component rule that sets a button's `color` or `background` needs `.ce-root` in front of
   it to outrank the reset.
 
@@ -479,7 +619,7 @@ Roughly in order of fun (see README for detail):
 3. ✅ **Web MIDI out** — done; `useMidiOut` + module 04, **Out**. Verified against a
    Waldorf Protein over USB-C in Chrome.
 4. ✅ **"Suggest a loop"** — done; `suggestLoop` + the **Suggest** control.
-5. ✅ **Make the built-in synth worth listening to** — done; `synth.js` + the **Sound**
+5. ✅ **Make the built-in synth worth listening to** — done; `synth.js` (now `synth/params.js`) + the **Sound**
    module. Sixteen live controls over waveform, envelope, a resonant filter with an LFO
    on its cutoff, chorus/reverb, and the velocity shaping that stops a block chord sounding
    like an organ. Presets set the sliders rather than hiding them, and the patch rides along
@@ -490,19 +630,46 @@ Roughly in order of fun (see README for detail):
    minor) and a 4-bar `suggestLoop`, waiting for Play. Any query string opens as written.
 9. ✅ **Evolve** — done; **Mutate** (once) and **Evolve** (each time the loop comes round)
    via `mutateLoop`, with the live-cursor playback, the queue and the history strip.
+10. ✅ **The synth, as an instrument** — done; split out of the explorer into its own device
+    (`synth/`), with a lowpass/highpass filter and a per-voice filter envelope (Amount,
+    Attack, Decay, Sustain), a scope comparing the signal either side of the filter by wave
+    and by spectrum with the live response curve, a 25-key keyboard, and MIDI in (notes on
+    any channel, sustain pedal, pitch bend). Dynamics and Humanise moved to the explorer.
+11. **Knobs from a controller** — map CCs (an MPK Mini's eight knobs send 70–77 by default)
+    to levels, ideally by MIDI learn: touch a level, turn a knob. `parseMidi` already hands
+    CCs through; nothing uses them yet.
+12. **More filter** — key tracking (the cutoff following the note, as a Moog's keyboard
+    control switches do), velocity to filter amount, a 12dB slope and bandpass/notch types
+    (append to `filterType`'s options and `filterResponse` already knows the maths for its
+    own two). Each is a row in `SYNTH_PARAMS` plus a line in `applySound`.
 
 ### Testing
 
-Two suites, one per model module; `npm test` runs both.
+A suite beside every pure module; `npm test` runs them all.
 
-[app/src/synth.test.js](app/src/synth.test.js) covers the sound model: that every parameter
-and preset is complete and in range, that the slider mapping round-trips every preset value
-and puts the ends of a range at the ends of the slider, that a patch survives the URL and
-reopens under its own preset name, that a short or damaged `sy=` falls back per parameter
-rather than throwing the lot away, and that `velocityCurve` is flat at zero dynamics, shaped
-at full, bounded under any jitter, and a pure function of its inputs.
+[app/src/synth/params.test.js](app/src/synth/params.test.js) covers the patch model: that
+every parameter and preset is complete and in range, that the wire format writes every live
+parameter once and never moves an existing slot, that the slider mapping round-trips every
+preset value and puts the ends of a range at the ends of the slider, that a patch survives
+the URL and reopens under its own preset name, that a short or damaged `sy=` falls back per
+parameter rather than throwing the lot away, that a link from before the filter envelope
+opens as it sounded then and hands its Dynamics and Humanise to the player, and that
+`cutoffAt` adds the envelope and the LFO in octaves.
 
-[app/src/harmony.test.js](app/src/harmony.test.js) covers the engine: key building across
+[app/src/synth/dsp.test.js](app/src/synth/dsp.test.js) covers the display's maths: that the
+response curve passes, cuts and resonates where Web Audio's biquads do (gain exactly the
+resonance at the corner, per stage; ~24dB an octave past it; a cutoff past Nyquist open for a
+lowpass and shut for a highpass), the octave axis, that no harmonic falls between two
+display points, and that the scope's trigger holds a chord's shape still.
+
+[app/src/chords/perform.test.js](app/src/chords/perform.test.js) covers how a chord is
+struck: `velocityCurve` flat at zero dynamics, shaped at full, bounded under any jitter, and a
+pure function of its inputs; the arpeggio orders; and `chordEvents`' block, arp, -4- and
+hold-bass timings. [app/src/chords/state.test.js](app/src/chords/state.test.js) covers the
+explorer's link, feel included, and the hand-over from old links.
+[app/src/midi/messages.test.js](app/src/midi/messages.test.js) covers reading a controller.
+
+[app/src/chords/harmony.test.js](app/src/chords/harmony.test.js) covers the harmony engine: key building across
 all three modes, `classify`, colour chords and suspensions, `optionsFrom` ranking and
 cadence copy, and the voicing helpers (common-tone retention, inversion rolls,
 `computeVoicings` purity, `voiceSteps` pairing, midi→note conversion), and the bass voice
