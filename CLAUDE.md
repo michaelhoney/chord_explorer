@@ -30,7 +30,9 @@ There is no root `package.json`; every script above runs from `app/`.
 
 **Deployment.** `.github/workflows/deploy.yml` builds `app/` and publishes `app/dist` to
 Cloudflare Pages (project `chords`, served at chords.michaelhoney.com) on every push to
-`main`, gated on lint and the test suites. It needs the repo secrets
+`main`, gated on lint and the test suites. `.github/workflows/check.yml` runs the same gates —
+lint, tests and a build — on every pull request into `main`, so a PR shows whether it would
+deploy before it's merged. The deploy needs the repo secrets
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The site is at the root of its domain,
 so `vite.config.js` has `base: '/'`; serving it under a path would need `base` to match.
 
