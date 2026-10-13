@@ -151,6 +151,23 @@ body{margin:0; background:#F3F3F0;}
 /* 120 bars for tempo: thinner, so they still have air between them */
 .ce-lvl.wide .ce-lvl-bar i{width:2px;}
 .ce-lvl.wide .ce-lvl-val{font-size:38px; letter-spacing:-.01em;}
+/* a controller knob on the level: its name printed beside the label, lit
+   while it turns; where it is, while it hasn't picked the level up; and in
+   Map, a dashed lamp outline on every level a knob could take */
+.ce-lvl-bar{position:relative;}
+.ce-lvl-tag{
+  font:600 13px var(--cond); font-style:normal; letter-spacing:.06em; margin-left:10px;
+  padding:1px 5px; border:1.5px solid var(--print2); border-radius:3px; color:var(--print);
+  vertical-align:2px; transition:color .1s, border-color .1s, box-shadow .1s;
+}
+.ce-lvl-tag.on{color:var(--lamp); border-color:var(--lamp); box-shadow:0 0 6px var(--lamp-glow); transition:none;}
+.ce-lvl-ghost{
+  position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; border-radius:1px;
+  background:var(--lamp); box-shadow:0 0 6px var(--lamp-glow); pointer-events:none;
+}
+.ce-lvl.pick{outline:1.5px dashed color-mix(in srgb, var(--lamp) 70%, transparent); outline-offset:7px; border-radius:3px;}
+.ce-lvl.pick .ce-lvl-bar{cursor:pointer;}
+.ce-lvl.pick:hover, .ce-lvl.target{outline:2px solid var(--lamp);}
 
 /* --- "No sound?" — on whichever display you're looking at ---------------- */
 .ce-nosound{
